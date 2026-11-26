@@ -53,6 +53,9 @@ struct SettingTab {
 
 std::span<const SettingTab> setting_tabs();
 
+// The Mods page's rows made from the mod list (port/ui/mods_rows.cpp): when the menu starts
+void fill_mod_rows();
+
 // The row of that label in the tab of that id, headings left out (shown or not), or nullptr: how the first-start
 // setup (setup_pages.hpp) names the rows it uses
 const SettingRow *find_setting_row(std::string_view tab_id, std::string_view label);

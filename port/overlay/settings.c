@@ -73,6 +73,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
+#include "port/mods.h"
 #include "port/stats.h"
 
 PortSettings port_settings = {
@@ -557,6 +558,7 @@ void port_settings_load(void) {
     if (s->attack_tracking != PORT_ATTACK_TRACKING_AUTO && s->attack_tracking < 100) {
         s->attack_tracking = 100; /* (no slower than the PS2's) */
     }
+    port_mods_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mod_list")); /* the Mods page's choices */
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     port_hands_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the hands mod */
@@ -839,6 +841,7 @@ void port_settings_save(void) {
     put(section("mods"), "detailed_notices", cJSON_CreateBool(s->detailed_notices));
     put(section("mods"), "instant_smith", cJSON_CreateBool(s->instant_smith));
     put(section("mods"), "attack_tracking", cJSON_CreateNumber(s->attack_tracking));
+    port_mods_settings_write(section("mod_list")); /* the Mods page's choices (port/include/port/mods.h) */
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_hands_settings_write(section("mods")); /* the hands mod */

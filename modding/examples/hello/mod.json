@@ -1,0 +1,10 @@
+{
+  "name": "Hello",
+  "version": "1.0",
+  "author": "Holyland",
+  "description": "An example mod with code: it logs what happens, counts the game's frames through a hook, and says hello on its key.",
+  "api": 1,
+  "plugin": { "windows-x64": "bin/windows-x64/hello.dll", "linux-x64": "bin/linux-x64/hello.so" },
+  "settings": [ { "key": "loud", "label": "Loud", "help": "Says hello louder.", "type": "toggle", "default": 0 } ],
+  "keys": [ { "key": "greet", "label": "Say hello", "default": "H" } ]
+}

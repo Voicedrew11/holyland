@@ -52,6 +52,21 @@ static uint32_t disc_sectors; /* the sectors the disc has */
 static FILE *open_host_file;
 static const DiscFile *open_host_entry;
 
+/* Archive members a mod replaces (port_disc_replace_member, port/platform/mods.c): served from memory at
+   sectors past the disc's end, and KF4.DAT's table is changed as it is read so that the game finds them there */
+typedef struct {
+    uint32_t entry;       /* the member's row in KF4.DAT's table */
+    unsigned char *data;  /* the new contents, padded with zeros to whole sectors */
+    uint32_t size;
+    uint32_t lsn;         /* its first sector, past the disc's end */
+} Replacement;
+
+static Replacement *replacements;
+static int replacement_count;
+static uint32_t archive_lsn;   /* KF4.DAT's first sector (0: not found) */
+static uint32_t virtual_end;   /* the sector after the last replacement's (0: none yet) */
+static void patch_archive_table(uint32_t lsn, uint32_t sectors, unsigned char *buffer);
+
 static char *copy_string(const char *s) {
     size_t n = strlen(s) + 1;
     char *copy = malloc(n);
@@ -225,6 +240,7 @@ static void list_archive(void) {
     if (!port_disc_find("\\DATA\\KF4.DAT", &lsn, &size)) {
         return;
     }
+    archive_lsn = lsn;
     toc = malloc(0x20000);
     if (toc == NULL || !port_disc_read(lsn, 0x20000 / DISC_SECTOR_SIZE, toc)) {
         free(toc);
@@ -368,6 +384,7 @@ static pthread_mutex_t read_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 static DiscRead disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
+static DiscRead disc_read_sectors(uint32_t lsn, uint32_t sectors, void *buffer);
 
 double port_hitch_disc_ms; /* (KF4_HITCH_MS, measure) */
 uint64_t port_hitch_disc_bytes;
@@ -412,14 +429,44 @@ int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     return result.ok;
 }
 
+/* (with the read lock) sectors past the disc's end: the replaced members' (port_disc_replace_member) */
+static int read_replaced(uint32_t lsn, uint32_t sectors, unsigned char *out) {
+    for (; sectors > 0; sectors--, lsn++, out += DISC_SECTOR_SIZE) {
+        int i;
+
+        memset(out, 0, DISC_SECTOR_SIZE);
+        for (i = 0; i < replacement_count; i++) {
+            const Replacement *r = &replacements[i];
+            uint32_t count = (r->size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE;
+
+            if (lsn >= r->lsn && lsn < r->lsn + count) {
+                memcpy(out, r->data + (size_t)(lsn - r->lsn) * DISC_SECTOR_SIZE, DISC_SECTOR_SIZE);
+                break;
+            }
+        }
+    }
+    return 1;
+}
+
 static DiscRead disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
-    unsigned char *out = buffer;
     DiscRead result = {1, 0};
 
     if (lsn >= disc_sectors) {
-        result.ok = 0;
+        /* past the disc's end: the replaced members, if any */
+        result.ok = lsn < virtual_end ? read_replaced(lsn, sectors, buffer) : 0;
         return result;
     }
+    result = disc_read_sectors(lsn, sectors, buffer);
+    if (result.ok && replacement_count > 0) {
+        patch_archive_table(lsn, sectors, buffer);
+    }
+    return result;
+}
+
+static DiscRead disc_read_sectors(uint32_t lsn, uint32_t sectors, void *buffer) {
+    unsigned char *out = buffer;
+    DiscRead result = {1, 0};
+
     if (image != NULL) {
         return read_image(lsn, sectors, buffer);
     }
@@ -500,4 +547,124 @@ const char *port_disc_name_at(uint32_t lsn, uint32_t *first_lsn) {
         *first_lsn = files[found].lsn;
     }
     return files[found].path;
+}
+
+
+static int strcasecmp_port(const char *a, const char *b) {
+    for (;; a++, b++) {
+        int x = toupper((unsigned char)(*a == '\\' ? '/' : *a)), y = toupper((unsigned char)(*b == '\\' ? '/' : *b));
+
+        if (x != y || x == 0) {
+            return x - y;
+        }
+    }
+}
+
+/* ---- Replaced archive members ------------------------------------------------------------------ */
+static void put_le32(unsigned char *p, uint32_t v) {
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+/* Points a read copy of KF4.DAT's table (or a part of it) at the replacements: each replaced row's size and
+   offset. The rows are 64 bytes on 64-byte boundaries, so a row never straddles two sectors. */
+static void patch_archive_table(uint32_t lsn, uint32_t sectors, unsigned char *buffer) {
+    int i;
+
+    if (archive_lsn == 0 || lsn >= archive_lsn + 0x20000 / DISC_SECTOR_SIZE || lsn + sectors <= archive_lsn) {
+        return;
+    }
+    for (i = 0; i < replacement_count; i++) {
+        const Replacement *r = &replacements[i];
+        uint32_t row = 0x40 + r->entry * 0x40;
+        uint32_t sector = archive_lsn + row / DISC_SECTOR_SIZE;
+        unsigned char *p;
+
+        if (sector < lsn || sector >= lsn + sectors) {
+            continue;
+        }
+        p = buffer + (size_t)(sector - lsn) * DISC_SECTOR_SIZE + row % DISC_SECTOR_SIZE;
+        put_le32(p + 0x34, r->size);
+        put_le32(p + 0x38, (r->size + DISC_SECTOR_SIZE - 1) & ~(DISC_SECTOR_SIZE - 1));
+        put_le32(p + 0x3C, (r->lsn - archive_lsn) * DISC_SECTOR_SIZE);
+    }
+}
+
+int port_disc_replace_member(const char *name, const void *data, uint32_t size) {
+    unsigned char *toc;
+    uint32_t count, entry, sectors, i;
+    Replacement *r = NULL;
+    int k;
+
+    if (archive_lsn == 0 || size == 0) {
+        return 0;
+    }
+    toc = malloc(0x20000);
+    if (toc == NULL || !disc_read_sectors(archive_lsn, 0x20000 / DISC_SECTOR_SIZE, toc).ok) {
+        free(toc);
+        return 0;
+    }
+    count = le32(toc + 4);
+    for (entry = 0; entry < count && 0x40 + (entry + 1) * 0x40 <= 0x20000; entry++) {
+        char listed[0x35];
+
+        memcpy(listed, toc + 0x40 + entry * 0x40, 0x34);
+        listed[0x34] = 0;
+        for (i = 0; listed[i] && name[i] && toupper((unsigned char)listed[i]) ==
+                                            toupper((unsigned char)(name[i] == '\\' ? '/' : name[i])); i++) {
+        }
+        if (listed[i] == 0 && name[i] == 0) {
+            break;
+        }
+    }
+    free(toc);
+    if (entry >= count || 0x40 + (entry + 1) * 0x40 > 0x20000) {
+        return 0;
+    }
+    if (virtual_end == 0) {
+        virtual_end = disc_sectors + 16;
+    }
+    sectors = (size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE;
+    /* the game reaches a member by its byte offset from KF4.DAT's start, a 32-bit number */
+    if ((uint64_t)(virtual_end + sectors - archive_lsn) * DISC_SECTOR_SIZE > 0xFFFFFFFFu) {
+        return 0;
+    }
+    for (k = 0; k < replacement_count; k++) {
+        if (replacements[k].entry == entry) {
+            r = &replacements[k];
+            free(r->data);
+            break;
+        }
+    }
+    if (r == NULL) {
+        Replacement *grown = realloc(replacements, (size_t)(replacement_count + 1) * sizeof(Replacement));
+
+        if (grown == NULL) {
+            PORT_FATAL("out of memory");
+        }
+        replacements = grown;
+        r = &replacements[replacement_count++];
+    }
+    r->entry = entry;
+    r->size = size;
+    r->lsn = virtual_end;
+    r->data = calloc(sectors, DISC_SECTOR_SIZE);
+    if (r->data == NULL) {
+        PORT_FATAL("out of memory");
+    }
+    memcpy(r->data, data, size);
+    virtual_end += sectors + 1;
+    /* the member's listing too, for port_disc_find_member and the log */
+    for (k = 0; k < file_count; k++) {
+        const char *listed = files[k].is_member ? strchr(files[k].path, ':') : NULL;
+
+        if (listed != NULL && strcasecmp_port(listed + 1, name) == 0) {
+            files[k].lsn = r->lsn;
+            files[k].size = size;
+        }
+    }
+    qsort(files, (size_t)file_count, sizeof(DiscFile), compare_lsn);
+    return 1;
 }

@@ -46,6 +46,8 @@
 
 #include "../overlay/update_badge.h"
 
+#include "port/mod_api.h" // the mods' pages (modding/include/holyland_mod.h)
+
 extern "C" {
 #include "port/controls.h"
 #include "port/menu_sounds.h"
@@ -215,8 +217,8 @@ void use_pad(SDL_JoystickID id) {
 }
 
 void set_open(bool open) {
-    if (open == menu.open || !menu.ready) {
-        return;
+    if (open == menu.open || !menu.ready || (open && port_mod_page_open() != nullptr)) {
+        return; // (a mod's page is open: the menu waits for it to close)
     }
     menu.open = open;
     menu.hint = {}; // (the menu was found: the hint has done its job for this run)
@@ -968,6 +970,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->Show();
     menu.profiler.load(*menu.context); // (without it, no profiler; the menu all the same)
     menu.model.open_at(0);
+    ui::fill_mod_rows(); // the Mods page from the mod list (port/ui/mods_rows.cpp)
     menu.ready = true;
     // the setup's tables against the menu's rows (setup_pages.hpp)
     std::string problems = ui::setup_problems(ui::find_setting_row);
@@ -997,6 +1000,13 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     if (menu.profiler.event(event)) {
         menu.document->PullToFront(); // (the menu stays over the profiler)
         return 1;
+    }
+    if (port_mod_page_open() != nullptr) { // a mod's page has the keys while it is open (the menu stays closed)
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
+            return 1;
+        }
+        SDL_Event copy = event;
+        return port_mod_event(HL_EVENT_UI_INPUT, &copy) || is_input(event.type);
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
         if (!event.key.repeat && !menu.in_setup) { // (the setup closes from its own pages only)
@@ -1076,13 +1086,41 @@ extern "C" int port_player_ui_ready(void) {
 }
 
 extern "C" int port_player_ui_open(void) {
-    return menu.ready && menu.open;
+    return menu.ready && (menu.open || port_mod_page_open() != nullptr);
+}
+
+extern "C" int port_player_ui_pauses(void) {
+    return menu.ready && menu.open; // (a mod's page keeps the game running: the mod holds the world if it wants)
+}
+
+// The mods are asked each picture whether their pages open (HL_EVENT_UI_POLL), once a vblank
+void poll_mods() {
+    static uint64_t polled = UINT64_MAX;
+    if (!menu.ready || polled == port_vblank_count()) {
+        return;
+    }
+    polled = port_vblank_count();
+    HlUiPoll poll = {menu.open ? 1 : 0};
+    port_mod_event(HL_EVENT_UI_POLL, &poll);
 }
 
 extern "C" int port_player_ui_visible(void) {
+    poll_mods();
     // (a hint waiting for the start of play: port_player_ui_draw watches for it)
     return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f || !notice_now().empty() ||
-                          !building_now().empty() || menu.profiler.shown());
+                          !building_now().empty() || menu.profiler.shown() || port_mod_page_open() != nullptr);
+}
+
+extern "C" void *port_player_ui_context(void) {
+    return menu.ready ? menu.context : nullptr;
+}
+
+extern "C" int port_player_ui_menu_open(void) {
+    return menu.ready && menu.open;
+}
+
+extern "C" float port_player_ui_scale(void) {
+    return menu.pixels_per_unit;
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -1221,16 +1259,26 @@ extern "C" void port_player_ui_draw(int width, int height) {
     menu.recorder.begin_frame(width, height);
     menu.context->SetDimensions(Rml::Vector2i(width, height));
     menu.context->SetDensityIndependentPixelRatio(dp);
-    show_state(hint_opacity());
     menu.profiler.update();
-    if (menu.open) {
-        pad_repeat();
-        play_cue();
-        watch_listening();
-        write_page();
+    HlUiSize size = {width, height};
+    bool page = port_mod_page_open() != nullptr;
+    if (page) { // a mod's page, the menu hidden under it
+        menu.document->Hide();
+        port_mod_event(HL_EVENT_UI_BEFORE, &size);
+    } else {
+        menu.document->Show();
+        show_state(hint_opacity());
+        if (menu.open) {
+            pad_repeat();
+            play_cue();
+            watch_listening();
+            write_page();
+        }
     }
     menu.context->Update();
-    if (menu.open) {
+    if (page) {
+        port_mod_event(HL_EVENT_UI_AFTER, &size);
+    } else if (menu.open) {
         scroll_to_focus();
     }
     menu.context->Render();

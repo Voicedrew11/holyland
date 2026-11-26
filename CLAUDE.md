@@ -117,6 +117,9 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   (`port/platform/ee_address.c`, `memory.c`).
 - Save states are exact but tied to one build. Quick saves (F2/F4) are the game's own save and survive
   updates.
+- Mods (`port/platform/mods.c`, `docs/port/MODS.md`): `<data folder>/mods/<mod>/files/` (whole KF4.DAT members) and
+  `text.json` (messages, item and spell names), read after the disc opens. `port_disc_replace_member` serves the new
+  contents from memory past the disc's end and changes KF4.DAT's table as it is read; the game code is unchanged.
 - No memory card: the save points' three saves are files (`<data folder>/saves/saveN.kf4save`, `--saves DIR|none`).
   `game/saves.c` stands in for the game's card layer (`save/save_card.c` and `save/mc.c` are left out of the
   build) and `port/platform/save_files.c` writes the files; the save and load screens skip choosing a card.
