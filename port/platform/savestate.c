@@ -135,12 +135,18 @@ void port_state_request_save(int slot) {
 }
 
 static char request_path[1100]; /* (a save to a file: port_state_request_save_file) */
+static char request_copy_path[1100]; /* (its copy, or "": port_state_request_save_file_and_copy) */
 static char request_load_path[1100]; /* (a load from a file: port_state_request_load_file) */
 
-void port_state_request_save_file(const char *path) {
+void port_state_request_save_file_and_copy(const char *path, const char *copy_path) {
     snprintf(request_path, sizeof(request_path), "%s", path);
+    snprintf(request_copy_path, sizeof(request_copy_path), "%s", copy_path);
     __atomic_store_n(&request_slot, -1, __ATOMIC_RELAXED);
     __atomic_store_n(&request, REQUEST_SAVE, __ATOMIC_RELEASE);
+}
+
+void port_state_request_save_file(const char *path) {
+    port_state_request_save_file_and_copy(path, "");
 }
 
 void port_state_request_load_file(const char *path) {
@@ -651,6 +657,7 @@ static void describe(char *out, size_t size, int slot, const char *path) {
    the write, so it is ended once. The writer touches only its Write until it sets `done`. */
 typedef struct {
     char path[1024];
+    char copy_path[1024]; /* a copy made once it is written, or "" */
     char name[1100];
     int threaded;      /* written by the writer thread (else here: no thread could be started) */
     StateBuffer buffer;
@@ -659,6 +666,7 @@ typedef struct {
     double taken_ms;   /* how long the game waited: the state taken in memory */
     double written_ms; /* the writer's: how long it took */
     int ok;            /* the writer's: 1 when written */
+    int copy_ok;       /* the writer's: 1 when the copy was made */
     int done;          /* set by the writer when it is through (atomic) */
 } Write;
 
@@ -682,10 +690,46 @@ static HANDLE writer;
 static pthread_t writer;
 #endif
 
+/* (the state writer's thread) the file at `from` copied whole to `to`, the old `to` kept if anything fails: 1 when
+   copied */
+static int copy_file(const char *from, const char *to) {
+    char temp[1100];
+    char chunk[1 << 16];
+    FILE *in = fopen(from, "rb");
+    FILE *out;
+    size_t n;
+    int ok;
+
+    if (in == NULL) {
+        return 0;
+    }
+    snprintf(temp, sizeof(temp), "%s.part", to);
+    out = fopen(temp, "wb");
+    if (out == NULL) {
+        fclose(in);
+        return 0;
+    }
+    ok = 1;
+    while (ok && (n = fread(chunk, 1, sizeof(chunk), in)) > 0) {
+        ok = fwrite(chunk, 1, n, out) == n;
+    }
+    ok = ok && !ferror(in);
+    fclose(in);
+    ok = fclose(out) == 0 && ok;
+    if (ok) {
+        ok = port_replace_file(temp, to);
+    }
+    if (!ok) {
+        remove(temp);
+    }
+    return ok;
+}
+
 static void write_and_mark(Write *w) {
     double start = port_wall_seconds();
 
     w->ok = write_state(w->path, &w->buffer, w->header);
+    w->copy_ok = w->ok && w->copy_path[0] != 0 && copy_file(w->path, w->copy_path);
     w->written_ms = (port_wall_seconds() - start) * 1000.0;
     __atomic_store_n(&w->done, 1, __ATOMIC_RELEASE);
 }
@@ -728,6 +772,9 @@ static void finish_write(int until_written) {
         set_message("saved to %s at vblank %llu (%.1f MB, SPU2 frame %llu; the game waited %.0f ms, written in %.0f ms)",
                     w->name, (unsigned long long)w->header.vblank, (double)w->buffer.size / 1048576.0,
                     (unsigned long long)w->spu2_frame, w->taken_ms, w->written_ms);
+        if (w->copy_path[0] != 0) {
+            port_event(w->copy_ok ? "state copied to %s" : "cannot copy the state to %s", w->copy_path);
+        }
     }
     keep_spare(&w->buffer);
     free(w);
@@ -762,8 +809,8 @@ static void start_write(Write *w) {
     }
 }
 
-/* 1 when done (or given up), 0 when it has to wait for a later vblank */
-static int save(int slot, const char *file) {
+/* 1 when done (or given up), 0 when it has to wait for a later vblank. copy_path: "" or a copy made once written. */
+static int save(int slot, const char *file, const char *copy_path) {
     char path[1024];
     char name[1100];
     const char *why = unavailable();
@@ -809,6 +856,7 @@ static int save(int slot, const char *file) {
         return 1;
     }
     snprintf(w->path, sizeof(w->path), "%s", path);
+    snprintf(w->copy_path, sizeof(w->copy_path), "%s", copy_path);
     snprintf(w->name, sizeof(w->name), "%s", name);
     w->buffer = job.buffer;
     w->header = header_now(job.buffer.size);
@@ -886,12 +934,12 @@ void port_state_host(void) {
     } else if (kind == REQUEST_SAVE) {
         int slot = __atomic_load_n(&request_slot, __ATOMIC_RELAXED);
 
-        if (save(slot, slot < 0 ? request_path : NULL)) {
+        if (save(slot, slot < 0 ? request_path : NULL, slot < 0 ? request_copy_path : "")) {
             __atomic_compare_exchange_n(&request, &kind, REQUEST_NONE, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
         }
     }
     while (save_at_next < save_at_count && save_at[save_at_next].vblank <= port_vblank_count()) {
-        if (!save(save_at[save_at_next].slot, save_at[save_at_next].path)) {
+        if (!save(save_at[save_at_next].slot, save_at[save_at_next].path, "")) {
             break;
         }
         save_at_next++;

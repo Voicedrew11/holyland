@@ -21,6 +21,7 @@
 
 #define PREFIX "history-"
 #define SUFFIX ".kf4quick"
+#define STATE_SUFFIX ".kf4state" /* its exact state, beside it (port/platform/quicksave.c) */
 #define PATH_SIZE 1024
 /* files read from the folder at most (more is never there unless put there by hand: the rule keeps 13) */
 #define LISTED_MAX 256
@@ -48,11 +49,15 @@ static void folder_path(char *out, size_t size) {
     snprintf(out, size, "%s/quicksaves/history", port_data_dir());
 }
 
-static void file_path(char *out, size_t size, uint32_t number) {
+static void named_path(char *out, size_t size, uint32_t number, const char *suffix) {
     char folder[PATH_SIZE];
 
     folder_path(folder, sizeof(folder));
-    snprintf(out, size, "%s/" PREFIX "%06u" SUFFIX, folder, (unsigned)number);
+    snprintf(out, size, "%s/" PREFIX "%06u%s", folder, (unsigned)number, suffix);
+}
+
+static void file_path(char *out, size_t size, uint32_t number) {
+    named_path(out, size, number, SUFFIX);
 }
 
 /* history-<n>.kf4quick's n, or 0 when the name is not one */
@@ -153,10 +158,12 @@ void port_quick_history_next_path(char *out, size_t size) {
     file_path(out, size, highest_number + 1);
 }
 
-/* The file and what the mods kept with it */
+/* The file, its exact state and what the mods kept with it */
 static void remove_save(uint32_t number) {
     char path[PATH_SIZE];
 
+    named_path(path, sizeof(path), number, STATE_SUFFIX);
+    remove(path); /* (a save may have none: taken before the history kept them, or not written) */
     file_path(path, sizeof(path), number);
     if (remove(path) != 0) {
         port_event("quick history: cannot remove %s", path);

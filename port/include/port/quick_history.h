@@ -13,9 +13,11 @@
    At most PORT_QUICK_HISTORY_MAX files (the three overlap, so fewer in practice).
 
    A file is named history-<n>.kf4quick, n counting up from 1 with each save (the newest has the highest n), a quick
-   save file like a slot's (port/platform/quicksave.c). It has no exact save state beside it: loading it loads the
-   game's save image with the live world of the maps put back, as a slot's load does after an update. The automap's
-   and the hands' files kept with each one are removed with it.
+   save file like a slot's (port/platform/quicksave.c), with a copy of the slot's exact save state beside it
+   (history-<n>.kf4state, about 13 MB), so loading it gives back everything as it was, enemies where they stood,
+   as a slot's load does. After an update, or for a save kept before the history kept states, the game's save image
+   is loaded instead, with the live world of the maps put back. The state and the automap's and the hands' files
+   kept with each one are removed with it.
 
    All on the game's thread (the menu's rows and the quick saves both run there). */
 #ifndef PORT_QUICK_HISTORY_H
