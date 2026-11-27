@@ -13,7 +13,9 @@
    that when the build that made it loads it (port_quick_load_exact): everything comes back as it was,
    the enemies where they stood, an event half played. After an update the state no longer loads and
    the image is loaded instead, with the live world of the two map slots put back (PortQuickMap): the
-   enemies killed stay dead and the items taken stay taken. */
+   enemies killed stay dead and the items taken stay taken.
+
+   Each quick save to a slot is also kept in the quick save history (port/include/port/quick_history.h). */
 #ifndef PORT_QUICKSAVE_H
 #define PORT_QUICKSAVE_H
 
@@ -78,12 +80,17 @@ void port_quick_request_save(int slot);
 void port_quick_request_load(int slot);
 /* A quick save to a file (the flash recorder's folder: port/debug/debug.c); path is copied */
 void port_quick_request_save_file(const char *path);
+/* A quick load from a file (the history's: port/include/port/quick_history.h); path is copied. A file has no exact
+   state beside it: the game loads its save image. */
+void port_quick_request_load_file(const char *path);
 /* A teleport (port/include/port/teleport.h): the game's image as it is now, with the map and the
    player's place changed, loaded as a made-up file is. patient: the command line's, which waits. */
 void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient);
 
 /* 1 and what slot `slot` holds, or 0 when it is empty or not a quick save */
 int port_quick_info(int slot, PortQuickInfo *info);
+/* The same for a quick save file */
+int port_quick_file_info(const char *path, PortQuickInfo *info);
 
 /* The last thing a request did, for the overlay and the log */
 const char *port_quick_message(void);

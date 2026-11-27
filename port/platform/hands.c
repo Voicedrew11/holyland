@@ -337,6 +337,16 @@ void port_hands_quick_saved(const char *path) {
     write_hands(file);
 }
 
+/* the file kept with a quick save that is gone (whether or not the mod is on now: it may have been then) */
+void port_hands_quick_removed(const char *path) {
+    char dir[1024], name[300], file[1400];
+
+    quick_name(path, name, sizeof(name));
+    folder(dir, sizeof(dir));
+    snprintf(file, sizeof(file), "%s/%s", dir, name);
+    remove(file); /* (none is fine: the mod was off) */
+}
+
 void port_hands_quick_loading(const char *path) {
     char file[300];
 
