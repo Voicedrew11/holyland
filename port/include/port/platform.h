@@ -193,6 +193,10 @@ typedef struct {
     /* how much faster an enemy's attack turns at you before it strikes (port_attack_tracking_scale()): in hundredths,
        100 the PS2's, or PORT_ATTACK_TRACKING_AUTO; settings.json's mods.attack_tracking, 100 by default */
     int attack_tracking;
+    /* the percent of the PS2's room to sidestep an enemy's attack that its turning leaves while it winds up, 0 to
+       100 (game/attack_tracking.h, port/sidestep_room.h); settings.json's mods.sidestep_room, 100 (the PS2's) by
+       default */
+    int sidestep_room;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;

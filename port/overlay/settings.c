@@ -20,7 +20,7 @@
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
        "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "no_hit_jolt": false, "auto_loot_gold": false,
                     "equipped_mark": false, "item_categories": false, "detailed_notices": false, "instant_smith": false,
-                    "attack_tracking": 100},
+                    "attack_tracking": 100, "sidestep_room": 100},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0,
                     "cheats_shown": false, "setup_version": 1}
      }
@@ -93,6 +93,7 @@ PortSettings port_settings = {
     .detailed_notices = 0,
     .instant_smith = 0,
     .attack_tracking = 100, /* (the PS2's) */
+    .sidestep_room = 100,   /* (the PS2's) */
     .fov = 64,
     .game_speed = 1.f,
     .volume = 100,
@@ -557,6 +558,8 @@ void port_settings_load(void) {
     if (s->attack_tracking != PORT_ATTACK_TRACKING_AUTO && s->attack_tracking < 100) {
         s->attack_tracking = 100; /* (no slower than the PS2's) */
     }
+    s->sidestep_room = (int)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "sidestep_room",
+        s->sidestep_room, 0, 100);
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     port_hands_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the hands mod */
@@ -621,6 +624,7 @@ void port_settings_load(void) {
     port_options.detailed_notices = s->detailed_notices; /* (no command-line switch) */
     port_options.instant_smith = s->instant_smith;
     port_options.attack_tracking = s->attack_tracking; /* (no command-line switch) */
+    port_options.sidestep_room = s->sidestep_room; /* (the same) */
     if (!port_options.show_fps_forced) {
         port_options.show_fps = s->show_fps;
     }
@@ -839,6 +843,7 @@ void port_settings_save(void) {
     put(section("mods"), "detailed_notices", cJSON_CreateBool(s->detailed_notices));
     put(section("mods"), "instant_smith", cJSON_CreateBool(s->instant_smith));
     put(section("mods"), "attack_tracking", cJSON_CreateNumber(s->attack_tracking));
+    put(section("mods"), "sidestep_room", cJSON_CreateNumber(s->sidestep_room));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_hands_settings_write(section("mods")); /* the hands mod */

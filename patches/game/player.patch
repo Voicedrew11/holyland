@@ -1,8 +1,8 @@
 diff --git a/src/game/player/attack.c b/src/game/player/attack.c
-index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a320ce296 100644
+index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..c160ec30567e150940b8693152b55072b8ec52b2 100644
 --- a/src/game/player/attack.c
 +++ b/src/game/player/attack.c
-@@ -6,6 +6,10 @@
+@@ -6,6 +6,13 @@
  #include "player/magic_ladder.h"
  #include "map_object/map_object.h"
  #include "effect/effect.h"
@@ -10,10 +10,13 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
++/* PC: an enemy's wind-up committed by its strike (game/attack_tracking.h) */
++void AttackTracking_NoteHit(Entity *owner, float half_arc, float reach);
++void AttackTracking_NoteShot(Entity *owner);
  
  #define IS_PLAYER(owner) ((owner) == (Entity *)&player_state)
  #define LARGER(first, second) ((first) < (second) ? (second) : (first))
-@@ -24,7 +28,7 @@
+@@ -24,7 +31,7 @@
      if (strength - whole > 0.001f) { \
          (dest) = whole + 1; \
      }
@@ -22,7 +25,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  
  s32 Attack_RunSphere(Unk1B1470Request *, Unk1B1470Extra *);
  int func_001B1B80(void);
-@@ -33,10 +37,9 @@ s32 Attack_RunSwept(Unk1B1470Request *, Unk1B1470Extra *);
+@@ -33,10 +40,9 @@ s32 Attack_RunSwept(Unk1B1470Request *, Unk1B1470Extra *);
  void Attack_HitPlayer(Unk1B1470Request *, Unk1B1470Extra *);
  void Attack_HitEntity(Unk1B1470Request *, Unk1B1470Extra *, Entity *, f32);
  void Attack_HitMapObject(Unk1B1470Request *, Unk1B1470Extra *, MapObject *);
@@ -34,7 +37,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  void Vector_Scale(float *, float *, float);
  void Vector_Subtract(void *, void *, void *);
  void Vector_Copy(void *, void *);
-@@ -53,9 +56,6 @@ void Attack_WearArmorFromHit(int, Unk1B1470Request *);
+@@ -53,9 +59,6 @@ void Attack_WearArmorFromHit(int, Unk1B1470Request *);
  void Player_TakeDamage(int);
  void Player_KnockBackFromHit(void *, int);
  void Player_TiltViewFromHit(int);
@@ -44,7 +47,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  int Attack_StrengthDamage(int, int, int, int);
  void Attack_RollEntityAilments(Entity *, EntityParamsUnk240PartUnk12 *);
  void Attack_WearWeapon(int, int);
-@@ -70,7 +70,6 @@ void Attack_WearWornItem(int idx, int amount);
+@@ -70,7 +73,6 @@ void Attack_WearWornItem(int idx, int amount);
  int File_Open(char *, int, int);
  int File_Read(int, void *, int);
  int File_Close(int);
@@ -52,7 +55,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  s32 Attack_Run(Unk1B1470Request *, Unk1B1470Extra *);
  
  // match: declared without a size, so it is not addressed through $gp
-@@ -89,15 +88,14 @@ extern const VuVector4 y_axis_vector;
+@@ -89,15 +91,14 @@ extern const VuVector4 y_axis_vector;
  extern GameStatus game_status;
  extern Entity entity_pool[][0x80];
  extern u32 frame_counter;
@@ -70,7 +73,17 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  extern char magic_param_path[];
  
  int Attack_TestMapModel(ModelInstance *, void *, f32);
-@@ -220,7 +218,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -113,6 +114,9 @@ FxTableEntry fx_table[256] = { 0 };
+ /* Runs an attack request against the world, by the request's shape (0 to 3). Only shapes
+    0 and 3 do anything. */
+ s32 Attack_Run(Unk1B1470Request *request, Unk1B1470Extra *extra) {
++    if (request->target_mask & 1) {
++        AttackTracking_NoteHit(request->owner, request->half_angle, request->radius); /* PC (game/attack_tracking.h) */
++    }
+     COLLISION_RESULT->floor_material = 6;
+     switch ((u8)((Unk1B1470RequestWord *)request)->flags & 3) {
+     case 0:
+@@ -220,7 +224,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                      if (!(body->unk00.flags & ENTITY_BODY_USED)) {
                          continue;
                      }
@@ -79,7 +92,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
                      if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
                          Collision_SphereCylinder(point, request, body->radius * scale, body->height * ENTITY_MODEL(entity)->scale_y,
                                        request->radius);
-@@ -235,7 +233,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -235,7 +239,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
              }
          }
      }
@@ -88,7 +101,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
          kind = 0;
      } else if (request->target_mask & 8) {
          kind = 1;
-@@ -265,10 +263,9 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -265,10 +269,9 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                      request->position[2] < record->lowest[2] - reach || record->highest[2] + reach < request->position[2]) {
                      continue;
                  }
@@ -101,7 +114,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
                      switch (result) {
                      case 1:
                          result = 8;
-@@ -381,7 +378,7 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -381,7 +384,7 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
                      if (!(body->unk00.flags & ENTITY_BODY_USED)) {
                          continue;
                      }
@@ -110,7 +123,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
                      if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
                          if (IS_PLAYER(request->owner)) {
                              Collision_CylinderArcPitch(point, request, body->radius * width_scale, body->height * ENTITY_MODEL(entity)->scale_y,
-@@ -456,6 +453,26 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -456,6 +459,26 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
      return 0;
  }
  
@@ -137,7 +150,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  /* Tests a hit's sphere against four of a map model's strip lists (0, 1, 2 and 5). When it
     touches a triangle the result is left in the scratchpad and the list's number returned. */
  int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
-@@ -475,69 +492,35 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
+@@ -475,69 +498,35 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
      mesh = (CollisionMeshLists *)model->strips;
      COLLISION_RESULT->hit = 0;
      if (mesh == NULL) {
@@ -216,7 +229,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
                  if (COLLISION_RESULT->hit != 0) {
                      COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(strip_point->material_first, strip_point->material_second, strip_point->material_third);
                      return lists.lists[list];
-@@ -547,6 +530,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
+@@ -547,6 +536,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
              strip = (CollisionStrip *)&strip_point[2];
          }
      }
@@ -224,7 +237,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  }
  
  /* Attack_TestMapModel for strip lists 1 and 5 only: returns 1 when the sphere touches a triangle
-@@ -568,69 +552,35 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
+@@ -568,69 +558,35 @@ int Attack_TestMapModelFloors(ModelInstance *model, void *request, f32 reach) {
      mesh = (CollisionMeshLists *)model->strips;
      COLLISION_RESULT->hit = 0;
      if (mesh == NULL) {
@@ -303,7 +316,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
                  if (COLLISION_RESULT->hit != 0) {
                      COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(strip_point->material_first, strip_point->material_second, strip_point->material_third);
                      return 1;
-@@ -662,69 +612,35 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
+@@ -662,69 +618,35 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
      mesh = (CollisionMeshLists *)model->strips;
      COLLISION_RESULT->hit = 0;
      if (mesh == NULL) {
@@ -382,7 +395,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
                  if (COLLISION_RESULT->hit != 0) {
                      COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(strip_point->material_first, strip_point->material_second, strip_point->material_third);
                      return 0;
-@@ -734,6 +650,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
+@@ -734,6 +656,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
              strip = (CollisionStrip *)&strip_point[2];
          }
      }
@@ -390,7 +403,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
  }
  
  /* A hit lands on the player: marks the attacking entity, works out the damage from the
-@@ -746,7 +663,7 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -746,7 +669,7 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
      s32 percent;
      s32 damage;
  
@@ -399,7 +412,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
          if (extra->is_magic_shot == 0) {
              owner->flags |= ENTITY_FLAG_RAISE_ATTACK_WEIGHT;
          } else {
-@@ -913,7 +830,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
+@@ -913,7 +836,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
      }
  
      // match: the range test (not one of the entities) is always true for the player
@@ -408,7 +421,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
          entity->flags |= ENTITY_FLAG_HIT_BY_PLAYER;
      }
      if (extra->is_magic_shot == 1) {
-@@ -1210,12 +1127,12 @@ void Attack_HitMapObject(Unk1B1470Request *request, Unk1B1470Extra *extra, MapOb
+@@ -1210,12 +1133,12 @@ void Attack_HitMapObject(Unk1B1470Request *request, Unk1B1470Extra *extra, MapOb
  }
  
  /* An attack struck the map: the player's weapon wears and bounces off. */
@@ -423,7 +436,7 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
              }
          }
      }
-@@ -1252,7 +1169,7 @@ void Attack_GetEffectiveStrengths(EntityParamsUnk240PartUnk00 *out, Unk1B1470Req
+@@ -1252,7 +1175,7 @@ void Attack_GetEffectiveStrengths(EntityParamsUnk240PartUnk00 *out, Unk1B1470Req
              STORE_ROUNDED_UP(out->unk00[7], request->unk50.unk00[7] + (f32)extra->player_magic * request->unk50.unk00[7] / 50.0f + extra->worn_magic_bonus[4] / 50.0f);
              STORE_ROUNDED_UP(out->unk00[8], request->unk50.unk00[8] + (f32)extra->player_magic * request->unk50.unk00[8] / 50.0f + extra->worn_magic_bonus[5] / 50.0f);
          }
@@ -432,6 +445,14 @@ index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..caa67e64247af61fe8ad5bfd3102c98a
          if (extra->is_magic_shot == 0) {
              *out = request->unk50;
          } else {
+@@ -1459,6 +1382,7 @@ int Attack_LaunchMagicEffect(u16 effect_id, void *shot, void *from, void *angles
+     if (entry->item_menu_magic != 0) {
+         return 0;
+     }
++    AttackTracking_NoteShot(entity); /* PC (game/attack_tracking.h) */
+     return Effect_Spawn(entry->effect_id, from, angles, entity, effect_id, shot);
+ }
+ 
 diff --git a/src/game/player/held_weapon.c b/src/game/player/held_weapon.c
 index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..b3ad5af997297de86f9ef76ba9191c46e8d5e66e 100644
 --- a/src/game/player/held_weapon.c

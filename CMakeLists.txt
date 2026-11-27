@@ -626,7 +626,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/attack_tracking.c game/cinematic.c game/screen_fx.c game/menu_pointer.c game/hint_rows.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/attack_tracking.c game/sidestep_room.c game/cinematic.c game/screen_fx.c game/menu_pointer.c game/hint_rows.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # PC mods built as game code whose state is the host's: their objects are linked after the save state's
@@ -918,6 +918,18 @@ target_include_directories(hint_rows_test PRIVATE port/include)
 target_link_libraries(hint_rows_test PRIVATE m)
 if(KF4_TESTS)
     add_test(NAME hint_rows COMMAND hint_rows_test)
+endif()
+
+# The Sidestep Room setting's sums: the room a sidestep has against an attack, the speed-up for a share of it
+# (game/sidestep_room.c)
+add_executable(sidestep_room_test tests/sidestep_room_test.c game/sidestep_room.c)
+target_include_directories(sidestep_room_test PRIVATE port/include)
+if(NOT WIN32)
+    target_compile_options(sidestep_room_test PRIVATE -Wall -Wextra -Wshadow)
+    target_link_libraries(sidestep_room_test PRIVATE m)
+endif()
+if(KF4_TESTS)
+    add_test(NAME sidestep_room COMMAND sidestep_room_test)
 endif()
 
 # The menus' pointer: hit-testing lines, stepping the cursor, clicks (game/menu_pointer.c)
