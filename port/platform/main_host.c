@@ -396,6 +396,7 @@ static void parse_options(int argc, char **argv) {
     port_options.detailed_notices = 0; /* (the same) */
     port_options.instant_smith = 0;
     port_options.attack_tracking = 100; /* (the PS2's) */
+    port_options.sidestep_room = 100; /* (the PS2's) */
     port_options.fov = 64;
     port_options.game_speed = 1.0f;
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;

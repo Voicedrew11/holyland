@@ -849,6 +849,15 @@ void describe_attack_tracking(int hundredths, char *out, size_t size) {
     }
     std::snprintf(out, size, "Auto (%gx)", double(port_attack_tracking_scale()));
 }
+// (percent, as port_options.sidestep_room)
+const Choice sidestep_rooms[] = {{"100% (Original)", 100}, {"75%", 75}, {"50%", 50}, {"25%", 25}};
+int get_sidestep_room() {
+    return port_options.sidestep_room;
+}
+void set_sidestep_room(int percent) {
+    port_settings.sidestep_room = port_options.sidestep_room = percent;
+    changed();
+}
 
 int get_stats() {
     return port_stats_options.on != 0;
@@ -1315,6 +1324,10 @@ const SettingRow gameplay_rows[] = {
      "controller.",
      RowKind::choice, attack_trackings, {}, get_attack_tracking, set_attack_tracking, nullptr,
      describe_attack_tracking},
+    {"Sidestep Room",
+     "How much room an enemy's attack leaves you to step out of it, against the original game. Less room: enemies "
+     "turn faster to follow you while they wind up, each attack by as much as it needs.",
+     RowKind::choice, sidestep_rooms, {}, get_sidestep_room, set_sidestep_room},
     {"Quick Slots", "", RowKind::heading},
     {"Quick Slots",
      "Two weapon slots, two spell slots and five item hotkeys, swapped with the D-pad. Select uses the item; Cross "

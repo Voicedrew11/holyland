@@ -835,7 +835,7 @@ index c44b5a78c545a33d19d04a8c6a0c28b694f80594..7facba7eb11ae694d2bfae44786799e9
  void Entity_ResetAllLists(void);
  void Entity_FreeAllInGroup(int group_id);
 diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
-index 26e563eb1b3443ffb1440f955b1e647836ac1320..c16a90031af976a430515469dfce4546903f8c75 100644
+index 26e563eb1b3443ffb1440f955b1e647836ac1320..de2bd0bafa055fb5df4618d9a7198cead9208384 100644
 --- a/src/game/entity/entity_ai.c
 +++ b/src/game/entity/entity_ai.c
 @@ -8,15 +8,18 @@
@@ -1078,47 +1078,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c16a90031af976a430515469dfce4546
          diff = atan2f(target[1] - entity->model->position[1], distance[0]);
          diff -= entity->model->rotation[0];
          diff = diff - (f32)(s32)(diff / 6.2831855f) * 6.2831855f;
-@@ -1708,6 +1690,13 @@ static float EntityAi_Decelerate(Entity *entity, float speed) {
-    once it is there. */
- s32 EntityAi_TurnToHeading(Entity *entity, f32 *speed, f32 target) {
-     f32 diff;
-+    /* PC: an attack's turn at the player, before it strikes, is faster by the attack tracking setting
-+       (port_attack_tracking_scale): the top speed times k and the build-up times k squared, so any turn takes 1/k
-+       the time. Every other turn is the game's own. */
-+    f32 scale = (entity->busy_flags & ENTITY_BUSY_ATTACK) && target == entity->heading_to_player
-+                    ? port_attack_tracking_scale() : 1.0f;
-+    f32 turn_step = entity->params->turn_step_per_frame * scale * scale;
-+    f32 turn_limit = entity->params->turn_limit * scale;
- 
-     target -= (int)(target / 6.2831855f) * 6.2831855f;
-     if (3.1415927f < target) {
-@@ -1727,9 +1716,9 @@ s32 EntityAi_TurnToHeading(Entity *entity, f32 *speed, f32 target) {
-         diff += 6.2831855f;
-     }
-     if (diff > 0.0f) {
--        *speed += entity->params->turn_step_per_frame;
--        if (*speed > entity->params->turn_limit) {
--            *speed = entity->params->turn_limit;
-+        *speed += turn_step;
-+        if (*speed > turn_limit) {
-+            *speed = turn_limit;
-         }
-         if (diff <= *speed) {
-             entity->turn_delta_yaw += diff;
-@@ -1738,9 +1727,9 @@ s32 EntityAi_TurnToHeading(Entity *entity, f32 *speed, f32 target) {
-         }
-         entity->turn_delta_yaw += *speed;
-     } else if (diff < 0.0f) {
--        *speed -= entity->params->turn_step_per_frame;
--        if (*speed < -entity->params->turn_limit) {
--            *speed = -entity->params->turn_limit;
-+        *speed -= turn_step;
-+        if (*speed < -turn_limit) {
-+            *speed = -turn_limit;
-         }
-         if (*speed <= diff) {
-             entity->turn_delta_yaw += diff;
-@@ -1834,7 +1823,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
+@@ -1834,7 +1816,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
      entity->reaction_step = 0;
      if (run_now != 0) {
          if (reaction != NULL) {
@@ -1127,7 +1087,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c16a90031af976a430515469dfce4546
          }
      }
      return 1;
-@@ -1874,8 +1863,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
+@@ -1874,8 +1856,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
  u16 Motion_FrameCount(ModelInstance *model, int index) {
      ModelPartLevels *levels;
  
@@ -1137,7 +1097,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..c16a90031af976a430515469dfce4546
      return *(u16 *)((char *)levels - 4);
  }
  
-@@ -1994,7 +1982,10 @@ void Entity_DrawPoolModels(void) {
+@@ -1994,7 +1975,10 @@ void Entity_DrawPoolModels(void) {
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)(s32)(ENTITY_MODEL(entity)->alpha * 32.0f * 0.0078125f) << 32) | 0x64);
          Packet_EndGsRegisters();
@@ -3305,10 +3265,10 @@ index d96bdada0a9d06660caa93fd252c407bf4594e93..22da47a2b800816f86ac52a0ba24273f
  /* 0x3E74C0 the Fire Lord's model matrix (second row zero in retail) */
  ModelMatrix fire_lord_model_matrix = {
 diff --git a/src/game/entity/entity_world.c b/src/game/entity/entity_world.c
-index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce51bf2569 100644
+index fb60460a3876d71caa23331e952e6898f39cb22d..306ee2f5d331f202a126f621b547225e63fbd0b3 100644
 --- a/src/game/entity/entity_world.c
 +++ b/src/game/entity/entity_world.c
-@@ -4,8 +4,11 @@
+@@ -4,8 +4,14 @@
  #include "gfx/gs.h"
  #include "map/map.h"
  #include "entity/entity.h"
@@ -3316,12 +3276,15 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
 +#include "core/game.h"
 +#include "player/player.h"
 +#include <string.h>
++/* PC: the wind-up's turning (game/attack_tracking.h) */
++void AttackTracking_BeforeUpdate(Entity *entity);
++void AttackTracking_AfterUpdate(Entity *entity);
  
 -void *memset(void *, int, u32);
  int rand(void);
  
  extern MapSlot map_slots[];
-@@ -15,15 +18,16 @@ extern int map_spawn_counts[2];
+@@ -15,15 +21,16 @@ extern int map_spawn_counts[2];
  extern EntitySpawnInfo *map_spawn_infos[2];
  extern char *entity_params;
  extern Vector4Arg entity_unit_scale;
@@ -3341,7 +3304,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
  extern const f32 D_004467F8[];
  
  void Vector_Copy(void *, void *);
-@@ -40,21 +44,20 @@ float EntityMath_DistanceXZ(void *, void *);
+@@ -40,21 +47,20 @@ float EntityMath_DistanceXZ(void *, void *);
  float EntityMath_HeadingTo(float *, float *);
  void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
  float EntityMath_WrapAngle(float);
@@ -3366,7 +3329,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
  #define MAP_RECORD(entity) ((MapRecord *)(entity)->map_record)
  #define SPAWN_FLAGS(spawn_info) ((EntitySpawnFlags *)&(spawn_info)->spawn_flags)
  
-@@ -65,7 +68,7 @@ static int Entity_IsMapRecordActive(Entity *entity);
+@@ -65,7 +71,7 @@ static int Entity_IsMapRecordActive(Entity *entity);
  static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity);
  static inline void entity_draw_set_model_tint(Entity *entity, f32 red, f32 green, f32 blue);
  
@@ -3375,7 +3338,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
  
  /* The set-up function entity_type_handlers gives types 27 and 83 to 95, which have no AI: puts the motion at
     animation 0, clears the work area, sets flags 22-28 and installs the table's update (Entity_UpdateInert).
-@@ -117,7 +120,7 @@ void Entity_InitFromMapSpawns(int map) {
+@@ -117,7 +123,7 @@ void Entity_InitFromMapSpawns(int map) {
          entity->pool_slot_index = -1;
          entity->spawn_info = spawn_info;
          entity_by_spawn_id[map][SPAWN_FLAGS(spawn_info)->bytes[4]] = entity;
@@ -3384,7 +3347,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
              ENTITY_FLAG_BITS(entity)->bit7 = FALSE;
          } else {
              ENTITY_FLAG_BITS(entity)->bit7 = TRUE;
-@@ -199,7 +202,7 @@ void Entity_ResetToSpawn(Entity *entity) {
+@@ -199,7 +205,7 @@ void Entity_ResetToSpawn(Entity *entity) {
      ENTITY_FLAG_BITS(entity)->bit10 = FALSE;
      ENTITY_FLAG_BITS(entity)->bit17 = TRUE;
      ENTITY_FLAG_BITS(entity)->bit31 = FALSE;
@@ -3393,7 +3356,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
      entity->handler = NULL;
      entity->prev_handler = NULL;
      entity->stun_frames = 0;
-@@ -240,7 +243,7 @@ void Entity_ResetToSpawn(Entity *entity) {
+@@ -240,7 +246,7 @@ void Entity_ResetToSpawn(Entity *entity) {
      entity->knockback_damping = ABS(entity->knockback_damping);
      entity->model->radius = (entity->collision_radius < entity->collision_height) ? entity->collision_height : entity->collision_radius;
      Motion_Start(entity, 0, 0, 0, 1);
@@ -3402,7 +3365,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
      Entity_RebuildModelMatrices(entity);
  }
  
-@@ -372,10 +375,10 @@ void Entity_UpdateAll(void) {
+@@ -372,10 +378,12 @@ void Entity_UpdateAll(void) {
              Vector_Scale(SCRATCH_VECTOR, SCRATCH_VECTOR, entity->knockback_speed);
              Vector_Add(entity->model->position, entity->model->position, SCRATCH_VECTOR);
          }
@@ -3411,11 +3374,13 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
              continue;
          }
 -        ((void (*)(Entity *))entity->update_func)(entity);
++        AttackTracking_BeforeUpdate(entity); /* PC: the wind-up's turning (game/attack_tracking.h) */
 +        entity->update_func(entity);
++        AttackTracking_AfterUpdate(entity);
          if (entity->knockback_speed > 0.0f) {
              entity->knockback_speed -= entity->knockback_damping * 4.0f / 10.0f;
          }
-@@ -390,9 +393,9 @@ void Entity_UpdateAll(void) {
+@@ -390,9 +398,9 @@ void Entity_UpdateAll(void) {
              ENTITY_MODEL(entity)->fog_block = &map_draw_state.fog_blocks[(u8)(MAP_RECORD(entity)->record_flags >> 27) & 1][MAP_RECORD(entity)->draw_block_index];
          }
          if ((s8)SPAWN_FLAGS(spawn_info)->bytes[3] != -1 || entity->map_record == NULL) {
@@ -3427,7 +3392,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
          }
          Model_UpdateSkinnedBonePoints(ENTITY_MODEL(entity));
      }
-@@ -484,7 +487,9 @@ void Entity_DrawAll(int list) {
+@@ -484,7 +492,9 @@ void Entity_DrawAll(int list) {
                      DrawList_Add(ENTITY_MODEL(entity), 0, list);
                  } else {
                      ModelTexture_SendForModel(ENTITY_MODEL(entity));
@@ -3438,7 +3403,7 @@ index fb60460a3876d71caa23331e952e6898f39cb22d..68a26b290a4e06fab73f2a0ee3270fce
                  }
                  if (entity->spawn_info->type_id == 0xF) {
                      FireLord_DrawAfterimages(entity, list);
-@@ -621,7 +626,7 @@ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity) {
+@@ -621,7 +631,7 @@ static MapRecordBounds *Entity_FindMapRecordUnder(Entity *entity) {
                  if (record->collision_mesh_index == 0xFFFF) {
                      continue;
                  }

@@ -23,6 +23,10 @@
 
 #include "imgui.h"
 
+#ifdef KF4_HAVE_PLAYER_UI
+#include "../ui/ui_assets.hpp" // the menu's Mincho, carried inside the game
+#endif
+
 #include "stats_menus.h"
 
 extern "C" {
@@ -490,13 +494,27 @@ int shown_screen;
 
 void stats_menus_fonts() {
     ImGuiIO &io = ImGui::GetIO();
-    // a serif like the game's menu text; the overlay's own font stays the default (the first)
+    // the player menu's Mincho (port/ui/res/fonts), the game's own letters' font, the same on every computer; the
+    // overlay's own font stays the default (the first)
+#ifdef KF4_HAVE_PLAYER_UI
+    if (const UiAsset *mincho = ui_asset("fonts/HolylandMincho.ttf")) {
+        ImFontConfig config;
+        config.FontDataOwnedByAtlas = false; // (the game's own array, never freed)
+        serif = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char *>(mincho->data), int(mincho->size), 24.0f,
+                                               &config);
+        if (serif != nullptr)
+            return;
+    }
+#endif
+    // else a serif from the system, like the game's menu text
     static const char *const candidates[] = {
         "C:/Windows/Fonts/timesbd.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
         "/usr/share/fonts/liberation-serif/LiberationSerif-Regular.ttf",
+        "/usr/share/fonts/liberation-serif-fonts/LiberationSerif-Regular.ttf",
         "/usr/share/fonts/TTF/LiberationSerif-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf",
         "/usr/share/fonts/TTF/DejaVuSerif.ttf",
     };
     for (const char *path : candidates) {

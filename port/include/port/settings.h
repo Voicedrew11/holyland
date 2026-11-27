@@ -82,6 +82,8 @@ typedef struct {
     int detailed_notices;  /* notices say what changed (port_detailed_notices; off by default) */
     int attack_tracking;   /* an enemy's attack turns at you this much faster before it strikes, in hundredths, or
                               PORT_ATTACK_TRACKING_AUTO (port_attack_tracking_scale; 100, the PS2's, by default) */
+    int sidestep_room;     /* the percent of the PS2's room to sidestep an enemy's attack that its wind-up's turning
+                              leaves (game/attack_tracking.h; 100, the PS2's, by default) */
     int instant_smith;     /* the smith restores and upgrades at once, for gold in place of the wait (port_instant_smith; off by default) */
     /* The overlay */
     int pause_when_open;

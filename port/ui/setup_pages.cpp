@@ -97,6 +97,7 @@ const PresetValue presets[] = {
     {"graphics", "Glyphs", {0, PORT_GLYPHS_AUTO, PORT_GLYPHS_AUTO}}, // (the disc's; what the player uses, sharp)
     {"controls", "Twin-Stick Controls", {0, 1, 1}},
     {"gameplay", "Attack Tracking", {100, PORT_ATTACK_TRACKING_AUTO, PORT_ATTACK_TRACKING_AUTO}},
+    {"gameplay", "Sidestep Room", {100, 100, 100}}, // (harder than the original: the player opts in)
     {"gameplay", "Instant Smith", {0, 0, 0}}, // (it changes the game's balance: the player opts in)
     {"gameplay", "Door Speed", {1, 1, 1}},    // (the PS2's: the player may change it on Gameplay)
     {"gameplay", "Auto-Loot Gold", {0, 0, 1}},
