@@ -1140,7 +1140,7 @@ int get_history_choice() {
 void set_history_choice(int index) {
     history_choice = index;
 }
-// how long ago it was saved, in the computer's time: "just now", "12 min ago", "2 h 5 min ago", "3 days ago"
+// how long ago it was saved, in the computer's time: "Just now", "12 min ago", "2 h ago", "2 h 5 min ago", "1 day ago", "3 days ago"
 void describe_history_choice(int index, char *out, size_t size) {
     PortQuickInfo info;
     if (!port_quick_history_info(index, &info)) {
@@ -1152,8 +1152,12 @@ void describe_history_choice(int index, char *out, size_t size) {
         std::snprintf(out, size, "Just now");
     } else if (minutes < 60) {
         std::snprintf(out, size, "%lld min ago", minutes);
+    } else if (minutes < 24 * 60 && minutes % 60 == 0) {
+        std::snprintf(out, size, "%lld h ago", minutes / 60);
     } else if (minutes < 24 * 60) {
         std::snprintf(out, size, "%lld h %lld min ago", minutes / 60, minutes % 60);
+    } else if (minutes < 2 * 24 * 60) {
+        std::snprintf(out, size, "1 day ago");
     } else {
         std::snprintf(out, size, "%lld days ago", minutes / (24 * 60));
     }
