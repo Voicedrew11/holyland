@@ -252,6 +252,12 @@ int port_frame_interp(void);
    scene renderer knows where the world ends, its camera and its fog (PORT_FRAME_INTERP_FOG) */
 int port_fog(void);
 
+/* The volumetric fog's look now (PORT_FOG_LOOK_*, port/fog.h: the player menu's sliders under Fog, settings.json's
+   display "fog_look"), in its field's units; any thread (the scene renderer's reads it each picture).
+   port_set_fog_look: the menu's and the settings' (clamped to the field's range) */
+int port_fog_look_now(int field);
+void port_set_fog_look(int field, int value);
+
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
    default) unless --draw-distance or the player menu's Graphics tab says 1.5, 2, 4 or max
    (PORT_DRAW_DISTANCE_MAX_FOG: no distance fog within the far plane). The game draws every map record

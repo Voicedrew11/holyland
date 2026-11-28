@@ -226,6 +226,9 @@ void pcr_take_record() {
 // (the scene renderer's, the depth rule's PCR_F_ZWRITE again) the fog made volumetric at each pixel (pcr_prim.h's
 // SCN_FOG_VOLUME, port/include/port/fog.h)
 #define PCR_F_SCN_FOG_VOLUME 0x10000000u
+// (... the depth rule's PCR_F_ZALWAYS again, with PCR_F_SCN_FOG_VOLUME) a draw blended other than the plain mix: fogged as the PS2
+// fogs it, then by what the volumetric fog leaves of that, kept from adding the fog colour twice (scn_fog_blended)
+#define PCR_F_SCN_FOG_FADE 0x20000000u
 #define PCR_F_LAYER 0x80000u       // (developers' KF4_PC_DEPTH=layers, no exact Z) a layer: its corners plane_at / 256 of a Z nearer
 #define PCR_F_PIXEL_CLAMP 0x80000000u // (... every draw) Z clamped to zmax at each pixel, not at the corners: the depth is
                                       // Z / zmax, the viewport's depth range 0 to zmax * zscale, the GPU's depth clamp

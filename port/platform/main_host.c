@@ -220,6 +220,7 @@
    With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
    what the command line does not say. */
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -906,6 +907,28 @@ float port_draw_distance(void) {
 
 int port_fog(void) {
     return port_options.fog == PORT_FOG_VOLUMETRIC ? PORT_FOG_VOLUMETRIC : PORT_FOG_PS2;
+}
+
+/* (written by the menu's and the settings' thread, read by the renderer's: atomics; 0 until set, read as the standard) */
+static atomic_int fog_look[PORT_FOG_LOOK_COUNT];
+static atomic_int fog_look_set[PORT_FOG_LOOK_COUNT];
+
+int port_fog_look_now(int field) {
+    const PortFogLookField *f = port_fog_look_field(field);
+    if (f == NULL) {
+        return 0;
+    }
+    return atomic_load_explicit(&fog_look_set[field], memory_order_acquire)
+               ? atomic_load_explicit(&fog_look[field], memory_order_relaxed)
+               : f->standard;
+}
+
+void port_set_fog_look(int field, int value) {
+    if (port_fog_look_field(field) == NULL) {
+        return;
+    }
+    atomic_store_explicit(&fog_look[field], port_fog_look_clamped(field, value), memory_order_relaxed);
+    atomic_store_explicit(&fog_look_set[field], 1, memory_order_release);
 }
 
 int port_draw_distance_sky(void) {

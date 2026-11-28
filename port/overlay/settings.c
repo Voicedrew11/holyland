@@ -443,6 +443,15 @@ void port_settings_load(void) {
         }
     }
     {
+        const cJSON *look = cJSON_GetObjectItemCaseSensitive(display, "fog_look");
+
+        for (int field = 0; field < PORT_FOG_LOOK_COUNT; field++) {
+            const PortFogLookField *f = port_fog_look_field(field);
+
+            s->fog_look[field] = (int)read_number(look, f->name, f->standard, f->low, f->high);
+        }
+    }
+    {
         const char *scale = read_string(display, "native_scale");
 
         if (scale != NULL) {
@@ -655,6 +664,9 @@ void port_settings_load(void) {
     if (!port_options.fog_forced) {
         port_options.fog = s->fog;
     }
+    for (int field = 0; field < PORT_FOG_LOOK_COUNT; field++) {
+        port_set_fog_look(field, s->fog_look[field]);
+    }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
     }
@@ -828,6 +840,14 @@ void port_settings_save(void) {
     put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
     put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
     put(display, "fog", cJSON_CreateString(port_fog_mode(s->fog) ? port_fog_mode(s->fog)->name : "ps2"));
+    {
+        cJSON *look = cJSON_CreateObject();
+
+        for (int field = 0; field < PORT_FOG_LOOK_COUNT; field++) {
+            cJSON_AddItemToObject(look, port_fog_look_field(field)->name, cJSON_CreateNumber(s->fog_look[field]));
+        }
+        put(display, "fog_look", look);
+    }
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "antialias", cJSON_CreateString(port_antialias(s->antialias) ? port_antialias(s->antialias)->name : "off"));

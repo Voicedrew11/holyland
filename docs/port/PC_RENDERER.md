@@ -209,8 +209,14 @@ stays whole, so each map keeps its own colour, start and end.
   use their own camera and time (`PictureDraw::camera`, `t`), so the drift is smooth at any rate.
 - **Cost** (owner's settings, real window, one 30 s run each): GPU time a picture 1.32 -> 1.36 ms at 009, 0.89 ->
   0.93 ms at 063 (about 3-4%, all in the native draws' fragment work); the same pictures a second.
-- **Developers'**: `KF4_FOG_LOOK=cell,strength,height,dx,dy,dz` (`1,0,0`: the PS2's), `KF4_SCN_FOG=0` (never
-  volumetric), `KF4_SCN_FOG_LOG=1` (the camera now and then).
+- **The look's sliders** (2026-11-28): under the Fog row while it is Volumetric, Fog Thickness (the mean density
+  times this), Mist (optical depth added along the ray, so fog shows where the PS2 has none, in the map's fog colour;
+  100% leaves 1 / e over 2000 units), Patchiness, Patch Size, Low-Lying and Drift Speed, and Reset Fog Look. A slider
+  is one entry in `port/fog.h`'s `PORT_FOG_LOOK_*` table; settings.json's display `fog_look`; live, read each picture
+  through `port_fog_look_now` (atomics). Mist also fogs effects that colour themselves by the fog (024's lava goes flat
+  red at high mist).
+- **Developers'**: `KF4_FOG_LOOK=cell,strength,height,dx,dy,dz` (`1,0,0`: the PS2's; it overrides the sliders, with
+  thickness 1 and no mist), `KF4_SCN_FOG=0` (never volumetric), `KF4_SCN_FOG_LOG=1` (the camera now and then).
 
 ## Drivers without synchronization2 (2026-11-22)
 

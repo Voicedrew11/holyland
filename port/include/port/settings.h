@@ -7,6 +7,8 @@
 
 #include <stddef.h>
 
+#include "port/fog.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,6 +50,7 @@ typedef struct {
     int draw_distance;     /* the opt-in longer view: PORT_DRAW_DISTANCE_ (port_options.draw_distance) */
     int draw_distance_sky; /* with it, the sky's fog pushed out too (port_options.draw_distance_sky) */
     int fog;               /* how the 3D world is fogged: PORT_FOG_*, port/fog.h (port_options.fog; "ps2") */
+    int fog_look[PORT_FOG_LOOK_COUNT];      /* the volumetric fog's look, PORT_FOG_LOOK_* (port/fog.h; port_set_fog_look) */
     int native_scale;      /* the renderer's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
     int native_widescreen; /* with widescreen, the renderer's picture drawn wider (port_options.native_widescreen) */
     int antialias;         /* the picture's anti-aliasing: PORT_AA_*, port/antialias.h (port_options.antialias) */

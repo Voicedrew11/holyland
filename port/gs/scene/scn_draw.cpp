@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -14,6 +15,8 @@
 #include "scn_shaders.h"
 
 extern "C" {
+#include "port/fog.h"
+#include "port/host.h"
 #include "port/platform.h"
 }
 #include "port/scene_depth.h"
@@ -43,19 +46,48 @@ struct FogUniform {
     float ray[4];     // the view's ray at target pixel p: (p.x ray.x + ray.y, p.y ray.z + ray.w, 1)
     float z[4];       // cz, az, 1 / the height (noise cells) the fog thins by e over, the noise's strength
     float drift[4];   // the noise's place (its texture's repeats), 1 / a noise cell's size in the world
+    float look[4];    // the mean density's factor (Thickness), the mist's optical depth a world unit at density 1
 };
 
 // (the volumetric fog's look, in the world's units (the eye is 220 over the floor): a noise cell, how much the noise
-// thickens and thins it, the height in cells over which it thins by e (0: the same at every height), and its drift in
-// cells a second; developers': KF4_FOG_LOOK=cell,strength,height,drift_x,drift_y,drift_z to try others, and
-// KF4_FOG_LOOK=1,0,0 the PS2's fog exactly)
+// thickens and thins it, 1 / the height in cells over which it thins by e (0: the same at every height), its drift in
+// cells a second, the mean density's factor and the mist a world unit. The player menu's sliders under Fog
+// (port_fog_look_now, port/fog.h), read each picture; developers': KF4_FOG_LOOK=cell,strength,height,drift_x,drift_y,
+// drift_z instead (thickness 1, no mist), and KF4_FOG_LOOK=1,0,0 the PS2's fog exactly)
 struct FogLook {
     float cell = 1500.0f, strength = 0.6f, height = 0.35f;
     float drift[3] = {0.05f, 0.01f, 0.03f};
+    float thickness = 1.0f, mist_per_unit = 0.0f;
+    float per_cell() const {
+        return height > 0.0f ? 1.0f / height : 0.0f;
+    }
 };
-FogLook fog_look() {
+// (the noise's drift in cells a second at Drift Speed 100%)
+constexpr float fog_drift_standard[3] = {0.05f, 0.01f, 0.03f};
+
+// The menu's look now
+FogLook fog_look_now() {
+    FogLook look;
+    look.thickness = float(port_fog_look_now(PORT_FOG_LOOK_THICKNESS)) / 100.0f;
+    look.mist_per_unit = port_fog_mist_per_unit(port_fog_look_now(PORT_FOG_LOOK_MIST));
+    look.strength = float(port_fog_look_now(PORT_FOG_LOOK_PATCHINESS)) / 100.0f;
+    look.cell = std::max(float(port_fog_look_now(PORT_FOG_LOOK_PATCH_SIZE)), 1.0f);
+    const float per_cell = port_fog_low_lying_per_cell(port_fog_look_now(PORT_FOG_LOOK_LOW_LYING));
+    look.height = per_cell > 0.0f ? 1.0f / per_cell : 0.0f;
+    const float drift = float(port_fog_look_now(PORT_FOG_LOOK_DRIFT)) / 100.0f;
+    for (int a = 0; a < 3; a++) {
+        look.drift[a] = fog_drift_standard[a] * drift;
+    }
+    return look;
+}
+
+// KF4_FOG_LOOK's, or nothing when it is not set
+std::optional<FogLook> fog_look_forced() {
     FogLook look;
     const char *v = getenv("KF4_FOG_LOOK");
+    if (!v || !*v) {
+        return std::nullopt;
+    }
     float *fields[6] = {&look.cell, &look.strength, &look.height, &look.drift[0], &look.drift[1], &look.drift[2]};
     for (float *field : fields) {
         if (!v || !*v) {
@@ -71,6 +103,11 @@ FogLook fog_look() {
     }
     look.cell = std::max(look.cell, 1.0f);
     return look;
+}
+
+FogLook fog_look() {
+    static const std::optional<FogLook> forced = fog_look_forced();
+    return forced ? *forced : fog_look_now();
 }
 
 uint32_t native_slot(pcr::NativeProgram program) {
@@ -709,7 +746,7 @@ void Drawer::make_fog_noise() {
 }
 
 void Drawer::prepare_fog(const Scene &scene) {
-    static const FogLook look = fog_look();
+    const FogLook look = fog_look();
     FogUniform u = {};
     const Fog &fog = scene.fog;
     // (a picture between's camera, at its time; else the frame's)
@@ -730,13 +767,15 @@ void Drawer::prepare_fog(const Scene &scene) {
         }
         u.z[0] = s[4];
         u.z[1] = s[5];
-        u.z[2] = look.height > 0.0f ? 1.0f / look.height : 0.0f;
+        u.z[2] = look.per_cell();
         u.z[3] = look.strength;
         // (the noise repeats every fog_noise_cells: its place wrapped there, so that it drifts on without a jump)
         for (int a = 0; a < 3; a++) {
             u.drift[a] = float(std::fmod(time_s * double(look.drift[a]) / double(fog_noise_cells), 1.0));
         }
         u.drift[3] = 1.0f / look.cell;
+        u.look[0] = look.thickness;
+        u.look[1] = look.mist_per_unit;
     }
     BufferCreateInfo info = {};
     info.domain = BufferDomain::LinkedDeviceHost;

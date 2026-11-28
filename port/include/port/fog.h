@@ -76,6 +76,68 @@ static inline float port_fog_volume_left(float left, float m) {
     return powf(left, m);
 }
 
+/* The volumetric fog's look, which the player menu's sliders under Fog set (settings.json's display "fog_look"): each
+   a whole number in the slider's units, one entry here. The scene renderer reads them as they are now
+   (port_fog_look_now, port/host.h) and turns them into the shader's terms below. */
+enum {
+    PORT_FOG_LOOK_THICKNESS,  /* percent: the ray's mean density times this (100: as the noise and height make it) */
+    PORT_FOG_LOOK_MIST,       /* percent: fog added along the ray where the PS2 has none, by the map's fog colour */
+    PORT_FOG_LOOK_PATCHINESS, /* percent: how much the noise thickens and thins it */
+    PORT_FOG_LOOK_PATCH_SIZE, /* world units (the eye is 220 over the floor): a noise cell */
+    PORT_FOG_LOOK_LOW_LYING,  /* percent: how much thicker it is below the eye than above (0: the same) */
+    PORT_FOG_LOOK_DRIFT,      /* percent: how fast the noise drifts */
+    PORT_FOG_LOOK_COUNT
+};
+
+typedef struct {
+    const char *name;  /* settings.json's key in display "fog_look" */
+    const char *label; /* the player menu's */
+    int low, high, step, standard;
+} PortFogLookField;
+
+static inline const PortFogLookField *port_fog_look_field(int field) {
+    static const PortFogLookField fields[PORT_FOG_LOOK_COUNT] = {
+        {"thickness", "Fog Thickness", 25, 400, 5, 100},     /* PORT_FOG_LOOK_THICKNESS (in the enum's order) */
+        {"mist", "Fog Mist", 0, 200, 5, 0},                  /* PORT_FOG_LOOK_MIST */
+        {"patchiness", "Fog Patchiness", 0, 100, 5, 60},     /* PORT_FOG_LOOK_PATCHINESS */
+        {"patch_size", "Fog Patch Size", 300, 6000, 100, 1500}, /* PORT_FOG_LOOK_PATCH_SIZE */
+        {"low_lying", "Fog Low-Lying", 0, 100, 5, 50},       /* PORT_FOG_LOOK_LOW_LYING */
+        {"drift", "Fog Drift Speed", 0, 500, 10, 100},       /* PORT_FOG_LOOK_DRIFT */
+    };
+    return field >= 0 && field < PORT_FOG_LOOK_COUNT ? &fields[field] : NULL;
+}
+
+/* value kept within its field's range */
+static inline int port_fog_look_clamped(int field, int value) {
+    const PortFogLookField *f = port_fog_look_field(field);
+    if (f == NULL) {
+        return 0;
+    }
+    return value < f->low ? f->low : value > f->high ? f->high : value;
+}
+
+/* The mist's optical depth per world unit along the ray at density 1, from its percent: at 100%, 2000 units of mist
+   leave 1 / e of a colour */
+static inline float port_fog_mist_per_unit(int percent) {
+    return (float)percent / 100.0f / 2000.0f;
+}
+
+/* The height term the shader thins the fog by (1 / the height, in noise cells, it thins by e over), from Low-Lying's
+   percent: 50% is the first look's 0.35 cells */
+static inline float port_fog_low_lying_per_cell(int percent) {
+    return (float)percent / 100.0f * (2.0f / 0.35f);
+}
+
+/* What the volumetric fog leaves with the look's terms: left^m (the PS2's fog m times as dense) and the mist's
+   optical depth mist_depth (its per unit times the ray's length times m) on top (pcr_prim.h's scn_fog_volume) */
+static inline float port_fog_look_left(float left, float m, float mist_depth) {
+    if (left <= 0.0f) {
+        return 0.0f; /* (the PS2's whole fog) */
+    }
+    float base = port_fog_volume_left(left, m);
+    return mist_depth > 0.0f ? base * expf(-mist_depth) : base;
+}
+
 #ifdef __cplusplus
 }
 #endif

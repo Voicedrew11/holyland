@@ -654,6 +654,7 @@ layout(set = 1, binding = 13, std140) uniform ScnFog {
     vec4 ray;     // the view's ray at target pixel p: (p.x ray.x + ray.y, p.y ray.z + ray.w, 1)
     vec4 z;       // cz, az (Z = cz + az / w), 1 / the height (in noise cells) the fog thins by e over, the noise's strength
     vec4 drift;   // the noise's place (in its texture's repeats: it drifts), 1 / a noise cell's size in the world
+    vec4 look;    // the mean density's factor (the menu's Thickness), the mist's optical depth a world unit at density 1
 } u_scn_fog;
 layout(set = 1, binding = 14) uniform sampler3D u_scn_noise; // value noise that repeats, 0 to 1, a cell a texel
 
@@ -668,13 +669,15 @@ float scn_fog_density(vec3 at, float height) {
     return clamp(thick * (1.0 + u_scn_fog.z.w * (2.0 * n - 1.0)), 0.05, 4.0);
 }
 
-// F (the PS2's, unclamped) made volumetric
+// F (the PS2's, unclamped) made volumetric: (F / 255)^m, and the mist's optical depth (its a unit times the ray's
+// length times m) on top (port/fog.h's port_fog_look_left)
 float scn_fog_volume(float f) {
     float left = clamp(f, 0.0, 255.0) / 255.0;
+    float mist = u_scn_fog.look.y;
     // (this pixel's Z as its depth has it: pcr_common.h's pcr_depth)
     float z = (pc.flags & PCR_F_PIXEL_CLAMP) != 0u ? gl_FragCoord.z * float(pc.zmax) : gl_FragCoord.z / pc.zscale;
-    if (left <= 0.0 || left >= 1.0 || z <= u_scn_fog.z.x) {
-        return f; // (no fog, all fog, or no place)
+    if (left <= 0.0 || (left >= 1.0 && mist <= 0.0) || z <= u_scn_fog.z.x) {
+        return f; // (all fog, no fog and no mist, or no place)
     }
     float w = u_scn_fog.z.y / (z - u_scn_fog.z.x);
     mat3 r = mat3(u_scn_fog.view[0].xyz, u_scn_fog.view[1].xyz, u_scn_fog.view[2].xyz); // (R's transpose)
@@ -688,18 +691,89 @@ float scn_fog_volume(float f) {
         vec3 rel = dir * (w * (0.4 + 0.2 * (float(i) + j))); // (from the eye: 0.4 to 1.0 of the way)
         m += scn_fog_density(eye + rel, -rel.y); // (the world's up is -Y)
     }
-    return m == 3.0 ? f : 255.0 * pow(left, m / 3.0); // (every density 1: the PS2's, exactly)
+    if (m == 3.0 && u_scn_fog.look.x == 1.0 && mist <= 0.0) {
+        return f; // (every density 1: the PS2's, exactly)
+    }
+    float mean = m / 3.0 * u_scn_fog.look.x;
+    float mist_depth = mist * mean * w * length(dir);
+    return 255.0 * pow(left, mean) * exp(-mist_depth);
 }
 #endif
 
-// The fog value at this pixel: the interpolated F, or (SCN_FOG_VOLUME) that made volumetric
+// The GS's fog value at this pixel: the interpolated F; a draw without the GS's fog (no PCR_F_FGE) 255, none
+float pcr_fog_ps2() {
+    return (pc.flags & PCR_F_FGE) != 0u ? v_fog : 255.0;
+}
+
+// The fog value at this pixel: the GS's, or (SCN_FOG_VOLUME) that made volumetric (without the GS's fog, the volumetric
+// fog's mist alone)
 float pcr_fog_value() {
 #ifdef SCN_FOG_VOLUME
     if ((pc.flags & PCR_F_SCN_FOG_VOLUME) != 0u) {
-        return scn_fog_volume(v_fog);
+        return scn_fog_volume(pcr_fog_ps2());
     }
 #endif
-    return v_fog;
+    return pcr_fog_ps2();
+}
+
+// rgb fogged by F value as the GS fogs: F rounded, the colour the fog colour plus (C - FOGCOL) * F / 256 rounded (F 255
+// leaves a colour as it is). Truncated, every fogged pixel came out a step darker than the GS's: at map 000 against
+// --renderer gs, 11% of pixels exact before, 46% after, 2026-11-21 (paraLLEl-GS's way)
+uvec3 pcr_fog_gs(uvec3 rgb, float value) {
+    int f = int(roundEven(clamp(value, 0.0, 255.0)));
+    ivec3 fog = ivec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu);
+    return uvec3(fog + (((ivec3(rgb) - fog) * f + 128) >> 8));
+}
+
+// (the flags that fog a draw: PCR_F_SCN_FOG_VOLUME's bit is another flag's outside the scene renderer)
+#ifdef SCN_FOG_VOLUME
+#define PCR_FOG_FLAGS (PCR_F_FGE | PCR_F_SCN_FOG_VOLUME)
+#else
+#define PCR_FOG_FLAGS PCR_F_FGE
+#endif
+
+#ifdef SCN_FOG_VOLUME
+// (PCR_F_SCN_FOG_FADE) The GS's fogged colour cs of a draw that blends other than the plain mix, its alpha a, with what
+// the volumetric fog leaves of the GS's fog, r (0 to 1), too. The blend (pc.alpha's (A - B) C + D) is k Cd + s Cs. With
+// the frame Cd a surface fogged by t, the fog's colour plus (surface - fog) t, the blend fogged as one by t is the fog
+// plus (k surface + s Cs - fog) t only where s Cs is s Cs t + fog (1 - k)(1 - t). So the colour out is cs r + fog g
+// (1 - r), g = (1 - k) / s: the plain mix's g is 1 (the GS's fog by F r), an added glow's (k 1) 0 (cs dimmed), a
+// creature's shine (Cd As + Cs: map 063's pillbugs) between. Without it, in thick fog, the shine added the fog's colour
+// over a fogged body: lighter than the fog around it (2026-11-28). r 1 leaves the GS's.
+uvec3 scn_fog_blended(uvec3 cs, uint a, float r) {
+    uint sel_a = pc.alpha & 3u, sel_b = (pc.alpha >> 2) & 3u, sel_c = (pc.alpha >> 4) & 3u, sel_d = (pc.alpha >> 6) & 3u;
+    // (C: As, Ad (unknown here: taken as 0x80, the most), FIX; in 128ths)
+    float c = (sel_c == 0u ? float(a) : sel_c == 2u ? float((pc.alpha >> 8) & 0xFFu) : 128.0) / 128.0;
+    float k = (float(sel_a == 1u) - float(sel_b == 1u)) * c + float(sel_d == 1u);
+    float sc = (float(sel_a == 0u) - float(sel_b == 0u)) * c + float(sel_d == 0u);
+    if (sc <= 0.0) {
+        return cs; // (the source adds nothing, or takes away: as the GS)
+    }
+    float g = clamp((1.0 - k) / sc, 0.0, 1.0);
+    vec3 fog = vec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu);
+    return uvec3(roundEven(clamp(vec3(cs) * r + fog * (g * (1.0 - r)), 0.0, 255.0)));
+}
+#endif
+
+// The fog on the colour c.rgb (its alpha c.a): the GS's (pcr_fog_gs), or the volumetric fog's. Without the GS's fog, a
+// colour is changed only where the volumetric fog's mist leaves less than all of it. (PCR_F_SCN_FOG_FADE) A draw that
+// blends other than the plain mix: the GS's fog, then scn_fog_blended by the volumetric fog's share of the GS's.
+uvec3 pcr_fogged(uvec4 c) {
+#ifdef SCN_FOG_VOLUME
+    const uint fade = PCR_F_SCN_FOG_VOLUME | PCR_F_SCN_FOG_FADE;
+    if ((pc.flags & fade) == fade) {
+        float ps2 = pcr_fog_ps2();
+        uvec3 cs = pcr_fog_gs(c.rgb, ps2);
+        float base = clamp(ps2, 0.0, 255.0);
+        float r = base > 0.0 ? clamp(pcr_fog_value() / base, 0.0, 1.0) : 1.0;
+        return r >= 1.0 ? cs : scn_fog_blended(cs, c.a, r);
+    }
+#endif
+    float value = (pc.flags & PCR_FOG_FLAGS) != 0u ? pcr_fog_value() : 255.0;
+    if ((pc.flags & PCR_F_FGE) == 0u && value >= 254.5) {
+        return c.rgb;
+    }
+    return pcr_fog_gs(c.rgb, value);
 }
 
 // The texture function (TFX, TCC) on the texture's colour at this pixel and the vertex colour vc, then the fog, into c:
@@ -727,14 +801,7 @@ float pcr_fog_value() {
             break; \
         } \
     } \
-    if ((pc.flags & PCR_F_FGE) != 0u) { \
-        /* the GS's fog as paraLLEl-GS has it: F rounded, the colour the fog colour plus (C - FOGCOL) * F / 256 \
-           rounded (F 255 leaves a colour as it is). Truncated, every fogged pixel came out a step darker than the \
-           GS's: at map 000 against --renderer gs, 11% of pixels exact before, 46% after, 2026-11-21 */ \
-        int f = int(roundEven(clamp(pcr_fog_value(), 0.0, 255.0))); \
-        ivec3 fog = ivec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
-        c.rgb = uvec3(fog + (((ivec3(c.rgb) - fog) * f + 128) >> 8)); \
-    }
+    c.rgb = pcr_fogged(c);
 
 #ifdef SCN_FUSE_280
 // ALPHA's (A - B) * C + D as blended above, over cd: the first pass's colour as written, not the destination's copy

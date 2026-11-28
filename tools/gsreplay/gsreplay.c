@@ -71,6 +71,7 @@
 
 #include "port/antialias.h"
 #include "port/debug.h"
+#include "port/fog.h"
 #include "port/gs_capture_format.h"
 #include "port/host.h"
 #include "port/lz4_block.h"
@@ -194,6 +195,12 @@ int port_whole_fields(void) {
 /* (pcr_native.cpp: the mirror image cut at its water, as the game's default) */
 int port_reflection_clip(void) {
     return 1;
+}
+
+/* (scn_draw.cpp's volumetric fog: the look it starts with) */
+int port_fog_look_now(int field) {
+    const PortFogLookField *f = port_fog_look_field(field);
+    return f != NULL ? f->standard : 0;
 }
 
 /* (pcr.cpp's latency levers: a replay draws no pictures between, so never behind) */

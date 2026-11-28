@@ -61,6 +61,27 @@ int main(void) {
     check(port_fog_volume_left(0.0f, 0.2f) == 0.0f, "the PS2's whole fog thinned");
     check(port_fog_volume_left(1.0f, 3.0f) == 1.0f, "no fog thickened");
 
+    /* the look's sliders: each has a name, a label and a range holding its standard; clamped to it */
+    for (int field = 0; field < PORT_FOG_LOOK_COUNT; field++) {
+        const PortFogLookField *f = port_fog_look_field(field);
+        check(f != NULL && f->name != NULL && f->label != NULL && f->step > 0, "a look field without a name or step");
+        if (f != NULL) {
+            check(f->low <= f->standard && f->standard <= f->high, "a look field's standard out of its range");
+            check(port_fog_look_clamped(field, f->low - 1) == f->low && port_fog_look_clamped(field, f->high + 1) == f->high,
+                  "a look field not clamped to its range");
+        }
+    }
+    check(port_fog_look_field(-1) == NULL && port_fog_look_field(PORT_FOG_LOOK_COUNT) == NULL, "a look field past the table");
+    check(port_fog_look_field(PORT_FOG_LOOK_THICKNESS)->standard == 100 &&
+              port_fog_look_field(PORT_FOG_LOOK_MIST)->standard == 0,
+          "the standard look is not the PS2's fog thickness without mist");
+    check(near_to(port_fog_low_lying_per_cell(50), 1.0f / 0.35f, 1e-4f), "Low-Lying 50% is not the first look's 0.35");
+    /* the mist: none leaves the volumetric fog's, some thins even where the PS2 has no fog, at 100% 2000 units 1 / e */
+    check(port_fog_look_left(left, 1.3f, 0.0f) == port_fog_volume_left(left, 1.3f), "no mist changes the fog");
+    check(port_fog_look_left(1.0f, 1.0f, 0.5f) < 1.0f, "mist does not fog where the PS2 has none");
+    check(near_to(port_fog_mist_per_unit(100) * 2000.0f, 1.0f, 1e-6f), "100% mist is not 1 / e over 2000 units");
+    check(port_fog_look_left(0.0f, 0.5f, 0.0f) == 0.0f, "the PS2's whole fog thinned by the look");
+
     if (failures == 0) {
         printf("fog_test: ok\n");
     }

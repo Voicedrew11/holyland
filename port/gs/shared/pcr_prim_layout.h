@@ -73,6 +73,7 @@ constexpr uint32_t F_DATE_MARK = 0x40000000;
 constexpr uint32_t F_DATE_CLEARS = 0x200000;
 constexpr uint32_t F_SCN_OWN_DEPTH = 0x200000; // (the scene renderer's settled decals' own depth: pcr_common.h; the rule's bit above)
 constexpr uint32_t F_SCN_FOG_VOLUME = 0x10000000; // (the scene renderer's volumetric fog: pcr_common.h; F_ZWRITE's bit)
+constexpr uint32_t F_SCN_FOG_FADE = 0x20000000; // (... a draw that adds, dimmed by it: pcr_common.h; F_ZALWAYS's bit)
 constexpr uint32_t F_LAYER = 0x80000; // (developers' KF4_PC_DEPTH=layers: pcr_common.h)
 constexpr uint32_t F_PIXEL_CLAMP = 0x80000000u; // (... and its Z clamped at each pixel: pcr_common.h)
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };

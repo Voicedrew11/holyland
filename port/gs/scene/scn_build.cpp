@@ -442,7 +442,7 @@ public:
         sm.push = first.push;
         uint32_t flags = texture_flags(s, sb.texture) | (first.push.flags & (F_PIXEL_CLAMP | F_EXACT_Z | F_DECAL));
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
-        flags |= bits(s.prim, 5, 1) && (first.push.flags & F_SCN_FOG_VOLUME) ? F_SCN_FOG_VOLUME : 0;
+        flags |= (first.push.flags & F_SCN_FOG_VOLUME) ? fog_flags(s) : 0;
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
         flags |= bits(s.prim, 6, 1) ? F_SHADER_BLEND : 0;
         flags |= (bits(s.test, 0, 1) && bits(s.test, 1, 3) != 1 ? 1u : 0u) << F_PASS_SHIFT;
@@ -3461,10 +3461,24 @@ private:
         }
     }
 
-    // Whether a draw with fog is drawn with the volumetric fog: the world's, but the sky's (and only where it tests
-    // Z: a draw that does not is no place in the world)
-    bool fog_volume(const DrawState &s) const {
-        return fog_.on && fog_.in_world && !fog_.sky && bits(s.prim, 5, 1) && bits(s.test, 16, 1);
+    // How a draw is drawn with the volumetric fog: 0, not (not the world's, the sky's, or not testing Z: a draw that
+    // does not is no place in the world; or a light without the PS2's fog that adds to the frame: it shines through);
+    // F_SCN_FOG_VOLUME, its F (255 without the PS2's fog: a creature can be drawn so, and then stood out bright against
+    // the misted walls) made volumetric; and F_SCN_FOG_FADE too where it blends other than the plain mix of it over the
+    // frame (a creature's shine: pcr_prim.h's scn_fog_blended).
+    uint32_t fog_flags(const DrawState &s) const {
+        if (!fog_.on || !fog_.in_world || fog_.sky || !bits(s.test, 16, 1)) {
+            return 0;
+        }
+        const bool fge = bits(s.prim, 5, 1), adds = bits(s.prim, 6, 1) && !fog_mixes(s.alpha);
+        if (!fge && adds) {
+            return 0;
+        }
+        return F_SCN_FOG_VOLUME | (adds ? F_SCN_FOG_FADE : 0);
+    }
+    // (ALPHA (A - B) C + D is the plain mix of the source over the frame: A Cs, B Cd, D Cd)
+    static bool fog_mixes(uint64_t alpha) {
+        return bits(alpha, 0, 2) == 0 && bits(alpha, 2, 2) == 1 && bits(alpha, 6, 2) == 1;
     }
 
     // A draw with the volumetric fog into a target placed at placed: the scene's fog from the world's (its camera and
@@ -5285,8 +5299,8 @@ private:
         bool tme = bits(s.prim, 4, 1) != 0;
         uint32_t flags = texture_flags(s, b.texture);
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
-        if (fog_volume(s)) {
-            flags |= F_SCN_FOG_VOLUME;
+        if (const uint32_t fog = fog_flags(s)) {
+            flags |= fog;
             fog_drawn(placed, s);
         }
         flags |= fba ? F_FBA : 0;
@@ -5841,7 +5855,7 @@ private:
     struct Counts {
         uint64_t frame_steps_dropped = 0;
         uint64_t held_renames = 0;
-        uint64_t fog_draws = 0; // (the draws with the volumetric fog: fog_volume)
+        uint64_t fog_draws = 0; // (the draws with the volumetric fog: fog_flags)
         uint64_t held_frames = 0, held_steps = 0, held_dead = 0, held_drawn = 0, held_snapshots = 0,
                  held_depth_read_late = 0, hold_refused_none = 0, hold_refused_target = 0, hold_refused_depth = 0,
                  hold_refused_first = 0;

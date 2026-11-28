@@ -455,6 +455,43 @@ bool fog_overridden() {
     return port_options.fog != port_settings.fog;
 }
 
+// The volumetric fog's look (port/fog.h's PORT_FOG_LOOK_*: a slider is one entry there), shown under Fog while it is
+// Volumetric; live (port_set_fog_look), kept in settings.json
+bool fog_volumetric() {
+    return port_options.renderer == PORT_RENDERER_SCENE && port_options.fog == PORT_FOG_VOLUMETRIC;
+}
+template <int field> int get_fog_look() {
+    return port_settings.fog_look[field];
+}
+template <int field> void set_fog_look(int value) {
+    port_settings.fog_look[field] = port_fog_look_clamped(field, value);
+    port_set_fog_look(field, port_settings.fog_look[field]);
+    changed();
+}
+void describe_fog_percent(int value, char *out, size_t size) {
+    std::snprintf(out, size, "%d%%", value);
+}
+void describe_fog_off_percent(int value, char *out, size_t size) {
+    if (value > 0) {
+        std::snprintf(out, size, "%d%%", value);
+    } else {
+        std::snprintf(out, size, "Off");
+    }
+}
+void reset_fog_look() {
+    for (int field = 0; field < PORT_FOG_LOOK_COUNT; field++) {
+        port_settings.fog_look[field] = port_fog_look_field(field)->standard;
+        port_set_fog_look(field, port_settings.fog_look[field]);
+    }
+    changed();
+}
+template <int field>
+SettingRow fog_look_row(const char *help, void (*describe)(int, char *, size_t)) {
+    const PortFogLookField *f = port_fog_look_field(field);
+    return {f->label, help, RowKind::number, {}, {f->low, f->high, f->step}, get_fog_look<field>, set_fog_look<field>,
+            nullptr, describe, fog_volumetric};
+}
+
 const Choice skies[] = {{"Modern", PORT_SKY_MODERN}, {"PS2", PORT_SKY_PS2}};
 int get_sky() {
     return port_options.native_sky;
@@ -617,6 +654,20 @@ const SettingRow graphics_rows[] = {
      distance_overridden, distance_note},
     {"Fog", "PS2: as on the PS2.\nVolumetric: worked out for each pixel; thicker low down, and it drifts.",
      RowKind::choice, fogs, {}, get_fog, set_fog, nullptr, nullptr, scene_renderer, nullptr, fog_overridden},
+    fog_look_row<PORT_FOG_LOOK_THICKNESS>("How much denser than the PS2's fog. 100% keeps each place's own amount.",
+                                          describe_fog_percent),
+    fog_look_row<PORT_FOG_LOOK_MIST>("Fog added up close too, where the PS2 has none, in the place's fog colour.",
+                                     describe_fog_off_percent),
+    fog_look_row<PORT_FOG_LOOK_PATCHINESS>("How uneven it is: thick and thin patches. 0% is even.",
+                                           describe_fog_off_percent),
+    fog_look_row<PORT_FOG_LOOK_PATCH_SIZE>("How big the patches are, in the game's units. You stand about 220 tall.",
+                                           nullptr),
+    fog_look_row<PORT_FOG_LOOK_LOW_LYING>("How much thicker it is below eye level than above. 0% is the same at "
+                                          "every height.",
+                                          describe_fog_off_percent),
+    fog_look_row<PORT_FOG_LOOK_DRIFT>("How fast the patches move.", describe_fog_off_percent),
+    {"Reset Fog Look", "Puts the fog's sliders back as they started.", RowKind::action, {}, {}, nullptr, nullptr,
+     reset_fog_look, nullptr, fog_volumetric},
     {"Sky Fog Distance", "Moves the sky's fog out with the draw distance too; lightens dark skies.", RowKind::toggle,
      on_off, {}, get_sky_fog, set_sky_fog, nullptr, nullptr, distance_longer},
     {"Sky", "Modern: drawn behind everything, so far hills show.\nPS2: the dome at its real distance, hiding what is "
