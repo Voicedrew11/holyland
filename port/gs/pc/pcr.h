@@ -94,6 +94,11 @@ void pcr_set_present_scale(int width, int height, float sharpen);
 int pcr_display_rect(const uint64_t *privileged, GsnRect *rect);
 void pcr_read_rect(const GsnRect *rect, uint32_t *rgba);
 
+/* (the game's thread, its packets before sent) A screen the game draws as fields begins before the display shows it in
+   field mode: drawn at the field screens' scale from here on (pcr.cpp's drawing_scale). The menu's backdrop, copied
+   from the last frame of play before the menu's first display settings are put. */
+void pcr_field_screen_begins(void);
+
 /* The settings: kept for the steps that draw; the counts returned are those the PC renderer will use */
 void pcr_set_scale(int x_scale, int y_scale);
 void pcr_set_lod(int mode);

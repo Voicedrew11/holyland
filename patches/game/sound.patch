@@ -1,5 +1,5 @@
 diff --git a/src/game/sound/sound.c b/src/game/sound/sound.c
-index 2bf97a1d5b57f308b6289e9d66afd3a4077459ed..fc8b91964b2d2b7b416fa5f4ca97249a59925cc6 100644
+index 2bf97a1d5b57f308b6289e9d66afd3a4077459ed..7827d337089144c9612cf7f40ea6ff8e0d24c241 100644
 --- a/src/game/sound/sound.c
 +++ b/src/game/sound/sound.c
 @@ -4,31 +4,18 @@
@@ -91,7 +91,7 @@ index 2bf97a1d5b57f308b6289e9d66afd3a4077459ed..fc8b91964b2d2b7b416fa5f4ca97249a
          if (retries < 0) {
              printf(rpc_timeout_message);
              return -1;
-@@ -162,7 +147,7 @@ static int SoundDriver_WaitRpc(void) {
+@@ -162,13 +147,13 @@ static int SoundDriver_WaitRpc(void) {
  
  /* The state of the sound driver's RPC client: 1 while a call is still running. */
  int SoundDriver_IsBusy(void) {
@@ -100,6 +100,13 @@ index 2bf97a1d5b57f308b6289e9d66afd3a4077459ed..fc8b91964b2d2b7b416fa5f4ca97249a
  }
  
  /* Sends a command and its arguments to the sound driver on the IOP (the game's own sceSdRemote;
+    fssnd_Remote in its timeout message) and returns the driver's answer. Commands with 0x80000 send
+    the record and take the reply into a buffer, those with 0x40000 send a buffer. */
+-int SoundDriver_Remote(int blocking, ...) {
++int (SoundDriver_Remote)(int blocking, ...) { /* PC: in brackets, past sound.h's macro */
+     va_list ap;
+     int command;
+     int no_wait;
 @@ -176,7 +161,7 @@ int SoundDriver_Remote(int blocking, ...) {
      int i;
  
@@ -423,7 +430,7 @@ index 2bf97a1d5b57f308b6289e9d66afd3a4077459ed..fc8b91964b2d2b7b416fa5f4ca97249a
      }
      while (sceSifLoadIopHeap(name, addr) < 0) {
 diff --git a/src/game/sound/sound.h b/src/game/sound/sound.h
-index ca054c573605bde5b17c6ee461546e57ae2b8ca8..473a721394423f884cc9071937b2caaeca860da5 100644
+index ca054c573605bde5b17c6ee461546e57ae2b8ca8..fd703c0bba37123b8db73f452e0601aa9853cc53 100644
 --- a/src/game/sound/sound.h
 +++ b/src/game/sound/sound.h
 @@ -6,6 +6,7 @@
@@ -628,6 +635,17 @@ index ca054c573605bde5b17c6ee461546e57ae2b8ca8..473a721394423f884cc9071937b2caae
      int size_a;                     /* 0x1C */
  } SoundStartInfo;
  
+@@ -282,6 +303,10 @@ void SoundDriver_ReleaseAll(void);
+ int SoundDriver_IsBusy(void);
+ /* Sends a command and its arguments to the driver on the IOP and returns its answer */
+ int SoundDriver_Remote(int blocking, ...);
++/* PC: it reads the command and eight words after it whatever the caller passed (the PS2's argument registers and
++   save area are always there to read); here reading past the caller's arguments is undefined, so every call passes
++   eight zeros after its own (ASan's stack-buffer-underflow in it) */
++#define SoundDriver_Remote(...) SoundDriver_Remote(__VA_ARGS__, 0, 0, 0, 0, 0, 0, 0, 0)
+ /* Keeps an upload to the IOP going; 1 once nothing is left to send */
+ int SoundDriver_StepUpload(void);
+ /* Turns the sound output on, once */
 diff --git a/src/game/sound/sound_game.c b/src/game/sound/sound_game.c
 index 4878b3533ef657dd879c637f5e00262899d04c95..8b50bb8f01eb2d4ad6a6232af8b607fa777e2508 100644
 --- a/src/game/sound/sound_game.c

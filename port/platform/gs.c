@@ -500,6 +500,14 @@ int port_whole_fields(void) {
     return port_options.whole_frame && !port_options.interlaced_menus;
 }
 
+void port_field_screen_begins(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_pc && port_whole_fields()) {
+        gsr_field_screen_begins();
+    }
+#endif
+}
+
 int port_seamless_scroll(void) {
     return port_options.seamless_scroll;
 }

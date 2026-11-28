@@ -11,8 +11,9 @@ cmake --preset linux-clang -B out/linux-clang-asan -DKF4_SANITIZE=address,undefi
 cmake --build out/linux-clang-asan
 ```
 
-Known reports, not the port's (docs/port/PC_RENDERER.md): `SoundDriver_Remote`, and the decomp's calls through
-function pointers cast to another type.
+Known reports, not the port's (docs/port/PC_RENDERER.md): the decomp's calls through function pointers cast to
+another type. (`SoundDriver_Remote`'s stack-buffer-underflow, its eight words read whatever the caller passed, is fixed
+since 2026-11-27: sound.h passes eight zeros after every call's own.)
 
 ## ThreadSanitizer
 

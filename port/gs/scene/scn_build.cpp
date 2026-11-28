@@ -247,6 +247,11 @@ public:
     void set_scale(uint32_t x, uint32_t y) override {
         pending_scale_ = {std::clamp(x, 1u, 8u), std::clamp(y, 1u, 8u)};
     }
+    bool scale_now() override {
+        flush_batch();
+        apply_scale();
+        return true;
+    }
     void set_sampling(int lod, uint32_t aniso) override {
         lod_mode_ = lod;
         aniso_ = std::clamp(aniso, 1u, 16u);
@@ -2816,8 +2821,8 @@ private:
     // `inside` (its own rectangle, which nothing changes while it is kept: what is drawn there draws it first), and no
     // texel past what the texture's copy would hold or wrapped. Each sprite's pixels as Vulkan covers them (their
     // middles, the corners half a GS pixel moved: gs_to_clip), each read nearest at UV there (linear across the
-    // sprite: the GPU's interpolation off by a little, then rounded to 1/256 as pcr_prim.h's texture_uv does), at the
-    // surface's scale.
+    // sprite: the GPU's interpolation off by a little, then rounded to 1/256 of the surface's pixel as pcr_prim.h's
+    // read_surface does), at the surface's scale.
     bool reads_inside(const Batch &b, const Placed &placed, const VkRect2D &inside) const {
         const DrawState &s = b.state;
         if (bits(s.clamp, 0, 2) >= 2 || bits(s.clamp, 2, 2) >= 2 || b.vertices.size() % 6 != 0 ||
@@ -2835,7 +2840,6 @@ private:
                                   int64_t((bits(s.scissor, 32, 11) + placed.y) * scale_[1])};
         const int64_t sc_hi[2] = {int64_t((bits(s.scissor, 16, 11) + 1 + placed.x) * scale_[0]) - 1,
                                   int64_t((bits(s.scissor, 48, 11) + 1 + placed.y) * scale_[1]) - 1};
-        const double slack = 1.0 / 1024.0;
         for (size_t i = 0; i < b.vertices.size(); i += 6) {
             const Vertex &a = b.vertices[i], &c = b.vertices[i + 4]; // (add_primitive's sprite: va, c, d, c, vb, d)
             if (a.q != 1.0f || c.q != 1.0f) {
@@ -2857,10 +2861,12 @@ private:
                     double x = double(px) / scale[k] - place[k];
                     return t0[k] + (x - p0[k]) * (t1[k] - t0[k]) / (p1[k] - p0[k]);
                 };
-                // (the GPU's interpolation a little either side, then rounded to 1/256 as the shader does)
+                // (the GPU's interpolation a little either side, a quarter of the rounding's step, then rounded to
+                // 1/256 of the surface's pixel as the shader does)
                 double ua = at(first[k]), ub = at(last[k]);
-                read_lo[k] = std::round((std::min(ua, ub) - slack) * 256.0) / 256.0;
-                read_hi[k] = std::round((std::max(ua, ub) + slack) * 256.0) / 256.0;
+                const double steps = 256.0 * scale[k], slack = 0.25 / steps;
+                read_lo[k] = std::round((std::min(ua, ub) - slack) * steps) / steps;
+                read_hi[k] = std::round((std::max(ua, ub) + slack) * steps) / steps;
             }
             if (empty) {
                 continue;
@@ -2869,8 +2875,10 @@ private:
                 if (read_lo[k] < 0.0 || read_hi[k] >= size[k]) {
                     return false;
                 }
-                int64_t h0 = int64_t(std::floor(read_lo[k] * scale[k])) + int64_t(place[k] * scale[k]);
-                int64_t h1 = int64_t(std::floor(read_hi[k] * scale[k])) + int64_t(place[k] * scale[k]);
+                int64_t h0 = int64_t(std::floor(std::round(read_lo[k] * scale[k] * 256.0) / 256.0)) +
+                             int64_t(place[k] * scale[k]);
+                int64_t h1 = int64_t(std::floor(std::round(read_hi[k] * scale[k] * 256.0) / 256.0)) +
+                             int64_t(place[k] * scale[k]);
                 if (h0 < lo_px[k] || h1 >= hi_px[k]) {
                     return false;
                 }

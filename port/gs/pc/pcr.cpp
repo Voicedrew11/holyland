@@ -134,6 +134,9 @@ struct VblankPicture {
     // whether kf4-pc tells the sender it is done with it (Renderer::routed_done_)
     bool direct = false, counted = false;
     double sent_s = 0; // (slice 5's question: when the sender put it in)
+    // (Renderer::picture) A screen the game draws as fields has begun (pcr_field_screen_begins) and the display is not
+    // in field mode yet: drawn as one
+    bool field_screen_ahead = false;
 };
 
 // A picture between's frame (frame_interp.c's: pcr_between.h), and a picture asked for, its runs' bits kept
@@ -677,10 +680,14 @@ private:
 // picture's 448, every line of the picture its own row, where stretched they were each two (the logos' and menus'
 // edges in steps of two lines). The lower field, drawn half a field's line higher, is then a line of the picture
 // higher, and is not shown. SCALE_FIELD_LINES marks it: the picture's size is the settings' (picture_down).
+// A screen begun before the display shows it in field mode (pcr_field_screen_begins: the menu's backdrop) is drawn so
+// from its beginning.
 constexpr uint32_t SCALE_FIELD_LINES = 1u << 16;
-uint32_t drawing_scale(uint32_t scale, const uint64_t *privileged, bool deinterlace) {
-    uint64_t smode2 = privileged[2 * 2];
-    if ((smode2 & 3) != 3 || !deinterlace || !port_whole_fields()) {
+bool field_mode(const uint64_t *privileged) {
+    return (privileged[2 * 2] & 3) == 3;
+}
+uint32_t drawing_scale(uint32_t scale, const VblankPicture &v) {
+    if (!(field_mode(v.privileged.data()) || v.field_screen_ahead) || !v.deinterlace || !port_whole_fields()) {
         return scale;
     }
     uint32_t down = std::min(((scale >> 8) & 0xFF) * 2, 8u);
@@ -1153,6 +1160,15 @@ public:
         if (frame_census_ && canvas_) {
             frame_census_->vblank(game_vblank, canvas_->counts());
         }
+    }
+
+    // (field_screen_begins) The drawing's scale set and taken now, not at the next vblank; false when it waits for it
+    bool scale_now(uint32_t scale) {
+        if (!drawing_) {
+            return false;
+        }
+        drawing_->set_scale(scale & 0xFF, scale_down(scale));
+        return drawing_->scale_now();
     }
 
     void print_census() const {
@@ -2916,10 +2932,15 @@ public:
         v.sent_s = port_wall_seconds();
         bool extra = (want & GSN_EXTRA) != 0;
         upper_field_.show_in(v, extra);
+        // (a field screen begun: until a vblank shows field mode)
+        if (field_mode(privileged) && !extra) {
+            field_screen_ahead_.store(false, std::memory_order_relaxed);
+        }
+        v.field_screen_ahead = field_screen_ahead_.load(std::memory_order_relaxed);
         // (the vblank's scale, as kf4-pc takes it: a picture's is the one of the last vblank's before it)
         uint32_t scale = send_scale_;
         if (!extra) {
-            send_scale_ = drawing_scale(settings.scale.load(), v.privileged.data(), v.deinterlace);
+            send_scale_ = drawing_scale(settings.scale.load(), v);
         }
         // The picture that shows a picture between sent to the pump directly (the next picture after it): the pump's
         // too, and kf4-pc only counts it (take_picture). One that shows a picture between kf4-pc was given, or that
@@ -3113,6 +3134,25 @@ public:
 
     uint32_t clear_rgba() const {
         return clear_.rgba;
+    }
+
+    // (the game's thread, its packets before sent) A screen the game draws as fields begins before the display shows
+    // field mode (pcr_field_screen_begins): from the next vblank the drawing scale is the field screens' until a vblank
+    // shows field mode, and the drawing takes it now, where it can (Drawing::scale_now)
+    void field_screen_begins() {
+        VblankPicture v = {};
+        v.field_screen_ahead = true;
+        v.deinterlace = port_options.deinterlace != 0;
+        const uint32_t scale = drawing_scale(settings.scale.load(), v);
+        if (!(scale & SCALE_FIELD_LINES)) {
+            return;
+        }
+        field_screen_ahead_.store(true, std::memory_order_relaxed);
+        run_job([this, scale] {
+            if (intake_.scale_now(scale)) {
+                picture_scale_ = scale;
+            }
+        });
     }
 
     // fn on the PC renderer's thread, after everything sent before; returns once it has run (false if the thread
@@ -3420,7 +3460,7 @@ private:
             ahead_stopped_ = false;
             ahead_left_ = 0;
             const double from = port_wall_seconds();
-            intake_.vblank(v.privileged.data(), drawing_scale(settings.scale.load(), v.privileged.data(), v.deinterlace),
+            intake_.vblank(v.privileged.data(), drawing_scale(settings.scale.load(), v),
                            settings.lod.load(), settings.aniso.load(),
                            settings.mode_2d.load(), settings.font.load(), settings.glyphs_now(), v.tag >> 16);
             note(DOING_VBLANK, from, port_wall_seconds());
@@ -3437,7 +3477,7 @@ private:
         uint32_t scale = picture_scale_;
         if (!extra) {
             // (a new scale from the next vblank)
-            picture_scale_ = drawing_scale(settings.scale.load(), v.privileged.data(), v.deinterlace);
+            picture_scale_ = drawing_scale(settings.scale.load(), v);
         }
         bool pumped = shows_pumped_ || v.direct;
         shows_pumped_ = false;
@@ -3958,6 +3998,8 @@ private:
     // pictures it sent kf4-pc that kf4-pc says it has taken (routed_done_) once taken
     bool direct_on_ = false; // (KF4_PC_DIRECT=0: off; set at open)
     uint32_t send_scale_ = 1 | 1 << 8;
+    // (field_screen_begins: set on the game's thread, read and cleared by the sender's)
+    std::atomic<bool> field_screen_ahead_{false};
     bool direct_show_ = false, normal_show_ = false;
     uint64_t routed_ = 0;
     // (kf4-pc's, read by the sender) the frame whose pictures between kf4-pc last gave the pump (0: none, or not now),
@@ -4112,6 +4154,12 @@ extern "C" void pcr_read_fifo(void *dst, uint32_t qwords) {
 
 extern "C" int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
     return pcr_picture(privileged, field, want_pixels, frame, 0);
+}
+
+extern "C" void pcr_field_screen_begins(void) {
+    if (renderer()) {
+        renderer()->field_screen_begins();
+    }
 }
 
 extern "C" int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
