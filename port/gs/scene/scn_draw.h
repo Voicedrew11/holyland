@@ -52,9 +52,13 @@ public:
     // bindings 0 to 2: pcr_between.h's), each native draw by the record its pictures draw it with
     // (Draw::picture_instance), and every image in stand_ins drawn into or read in its stand-in's place (the images the
     // scene writes: the picture never draws into the GS's memory)
+    // (the volumetric fog, Scene::fog: by the picture's camera, at its time, t of the way from the frame before's to the
+    // frame's)
     struct PictureDraw {
         pcr::Drawing::PictureBuffers buffers;
         const std::unordered_map<const Vulkan::Image *, Vulkan::ImageHandle> *stand_ins = nullptr;
+        FogCamera camera;
+        float t = 1.0f;
     };
 
     // The scene's steps into cmd, in order: each op between full barriers, each pass a render pass. What follows in cmd
@@ -250,6 +254,11 @@ private:
     void draw_run(const Pending &r, Vulkan::CommandBuffer &c); // (the run's calls: one draw, or one indirect draw)
     void bind_records(const Pass &pass, const Draw &d, Vulkan::CommandBuffer &c);
     void bind_own(const Scene &scene, const Pass &pass, const Draw &d, const Material &m, Vulkan::CommandBuffer &c);
+    // (the volumetric fog, pcr_prim.h's SCN_FOG_VOLUME) the scene's fog for the picture recorded (record's), and its
+    // uniform and noise bound at set 1's bindings 13 and 14, as every draw's (the defaults where the scene has none)
+    void prepare_fog(const Scene &scene);
+    void bind_fog(Vulkan::CommandBuffer &c);
+    void make_fog_noise();
     void push_record(Vulkan::CommandBuffer &c, uint32_t record);
     void full_barrier(Vulkan::CommandBuffer &c);
     void pass_to_pass_barrier(Vulkan::CommandBuffer &c);
@@ -305,6 +314,8 @@ private:
     Pending pending_;
     FILE *runs_log_ = nullptr; // (developers', KF4_SCN_RUNS_LOG=FILE: a line a scene recorded, its calls and runs)
     Vulkan::Program *picture_layer_ = nullptr; // (pcr_prim.vert with scn_picture_layer.frag)
+    Vulkan::ImageHandle fog_noise_;            // (pcr_prim.h's u_scn_noise: make_fog_noise)
+    Vulkan::BufferHandle fog_uniform_;         // (its ScnFog, prepare_fog's: the scene's recorded last)
     Vulkan::Program *fused_280_ = nullptr;
     // (exact Z's settle: each records vertex shader with pcr_depth_reset.frag)
     std::array<Vulkan::Program *, size_t(Program::count)> depth_reset_rec_{};

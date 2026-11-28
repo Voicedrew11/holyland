@@ -14,6 +14,7 @@ typedef enum {
     PORT_LIVE_NATIVE_SCALE,      /* 0 (auto) or 1 to 4: the renderer's resolution, times the PS2's */
     PORT_LIVE_FRAME_RATE,        /* pictures a second: 30 to 240, PORT_FRAME_RATE_MONITOR or _UNLOCKED */
     PORT_LIVE_DRAW_DISTANCE,     /* PORT_DRAW_DISTANCE_ */
+    PORT_LIVE_FOG,               /* PORT_FOG_*: the 3D world's fog (port/fog.h) */
     PORT_LIVE_NATIVE_DRAW,       /* PORT_ND_* kinds; those the renderer does not draw are left out */
     PORT_LIVE_SKY,               /* PORT_SKY_: how the sky is drawn natively */
     PORT_LIVE_ANTIALIAS,         /* PORT_AA_*: the picture's anti-aliasing (port/antialias.h) */

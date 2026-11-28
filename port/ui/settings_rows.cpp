@@ -12,6 +12,7 @@
 
 extern "C" {
 #include "port/antialias.h"
+#include "port/fog.h"
 #include "port/automap.h"
 #include "port/cheats.h"
 #include "port/cinematic.h"
@@ -436,6 +437,24 @@ void set_sky_fog(int on) {
     changed();
 }
 
+// (in port/fog.h's order: a mode is one entry there)
+const std::array<Choice, PORT_FOG_COUNT> fogs = [] {
+    std::array<Choice, PORT_FOG_COUNT> choices = {};
+    for (int m = 0; m < PORT_FOG_COUNT; m++) {
+        choices[size_t(m)] = {port_fog_mode(m)->label, m};
+    }
+    return choices;
+}();
+int get_fog() {
+    return port_options.fog;
+}
+void set_fog(int mode) {
+    port_live_set(PORT_LIVE_FOG, mode);
+}
+bool fog_overridden() {
+    return port_options.fog != port_settings.fog;
+}
+
 const Choice skies[] = {{"Modern", PORT_SKY_MODERN}, {"PS2", PORT_SKY_PS2}};
 int get_sky() {
     return port_options.native_sky;
@@ -596,6 +615,8 @@ const SettingRow graphics_rows[] = {
     {"Draw Distance", "How far the fog starts. 1x is the PS2's. No fog also removes some places' mist.",
      RowKind::choice, distances, {}, get_distance, set_distance, nullptr, nullptr, nullptr, nullptr,
      distance_overridden, distance_note},
+    {"Fog", "PS2: as on the PS2.\nVolumetric: worked out for each pixel; thicker low down, and it drifts.",
+     RowKind::choice, fogs, {}, get_fog, set_fog, nullptr, nullptr, scene_renderer, nullptr, fog_overridden},
     {"Sky Fog Distance", "Moves the sky's fog out with the draw distance too; lightens dark skies.", RowKind::toggle,
      on_off, {}, get_sky_fog, set_sky_fog, nullptr, nullptr, distance_longer},
     {"Sky", "Modern: drawn behind everything, so far hills show.\nPS2: the dome at its real distance, hiding what is "

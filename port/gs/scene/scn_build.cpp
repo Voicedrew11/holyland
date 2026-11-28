@@ -38,6 +38,8 @@
 extern "C" {
 #include "gsn.h"
 #include "gsn_vram.h"
+#include "port/fog.h"
+#include "port/host.h"
 #include "port/render.h"
 }
 
@@ -440,6 +442,7 @@ public:
         sm.push = first.push;
         uint32_t flags = texture_flags(s, sb.texture) | (first.push.flags & (F_PIXEL_CLAMP | F_EXACT_Z | F_DECAL));
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
+        flags |= bits(s.prim, 5, 1) && (first.push.flags & F_SCN_FOG_VOLUME) ? F_SCN_FOG_VOLUME : 0;
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
         flags |= bits(s.prim, 6, 1) ? F_SHADER_BLEND : 0;
         flags |= (bits(s.test, 0, 1) && bits(s.test, 1, 3) != 1 ? 1u : 0u) << F_PASS_SHIFT;
@@ -551,13 +554,16 @@ public:
     }
 
     // (frame_interp.c's replays and pictures between: not the scene renderer's yet; their marks pass)
-    void frame_mark(uint64_t) override {}
+    void frame_mark(uint64_t value) override {
+        fog_mark(value);
+    }
     void upload_again(const GsRegisterFile &, uint64_t) override {
         counts_.uploads_again_passed++;
     }
 
     void forget() override {
         flush_batch();
+        fog_.in_world = fog_.sky = fog_.on = false;
         close_scene(true);
         store_.forget();
         colour_.clear();
@@ -1786,7 +1792,7 @@ public:
         }
     }
 
-    bool picture_between(const GsnInterpPicture &, const PictureBuffers &buffers) override {
+    bool picture_between(const GsnInterpPicture &picture, const PictureBuffers &buffers) override {
         if (kept_.empty()) {
             counts_.pictures_not_drawn++;
             return false;
@@ -1847,6 +1853,10 @@ public:
         Drawer::PictureDraw pd;
         pd.buffers = buffers;
         pd.stand_ins = &stand_ins_;
+        // (the volumetric fog by the picture's camera, at its time)
+        std::copy(std::begin(picture.mid), std::end(picture.mid), pd.camera.world_to_view.begin());
+        std::copy(std::begin(picture.screen), std::end(picture.screen), pd.camera.screen.begin());
+        pd.t = picture.t;
         for (const auto &scp : kept_) {
             const Scene &sc = *scp;
             drawer_.record(sc, *cmd, &pd);
@@ -1946,6 +1956,9 @@ public:
                     (unsigned long long)counts_.fused, (unsigned long long)counts_.fuse_firsts,
                     (unsigned long long)counts_.fused_same, why.empty() ? ": none" : why.c_str(),
                     (unsigned long long)drawer_.counts().fused_unrecorded);
+        }
+        if (counts_.fog_draws) {
+            fprintf(stderr, "[stats] scene renderer volumetric fog: %llu draws\n", (unsigned long long)counts_.fog_draws);
         }
         if (counts_.frames_kept || counts_.frames_not_kept) {
             fprintf(stderr,
@@ -3378,6 +3391,106 @@ private:
         }
         pass_.open = false; // (what follows is not the darkening's)
     }
+
+    // ---- The volumetric fog (port/fog.h; pcr_prim.h's SCN_FOG_VOLUME, scn_draw.cpp's bind_fog) ----
+    // game/frame_interp.c marks the world in the chain: its camera's headers (the world's, mode 0, with the fog's mode:
+    // PORT_FRAME_INTERP_FOG), the sky's records, the arm, and where the world ends. With the fog volumetric, the
+    // world's draws with fog (not the sky's) are drawn with PCR_F_SCN_FOG_VOLUME: each keeps its own fog (its fog
+    // block's terms and colour, as the PS2 has it), varied at each pixel by the density along the view's ray from the
+    // world's camera (Scene::fog). So translucent effects, water and the fire keep theirs, each record its own block,
+    // and an effect that colours itself by the fog (map 009's fire) as much as before where the density is 1. A
+    // full-screen pass over the world by its depth, as first planned, fogged a flame by the wall behind it and the
+    // sky dome and the other records by the player's block (tried 2026-11-27). The arm, the held item, the sky, the
+    // HUD and the screen's passes keep the PS2's fog. The pictures between vary it by their own camera and time
+    // (Drawer::PictureDraw).
+    struct FogWatch {
+        std::array<float, PORT_FRAME_INTERP_FOG + 1> fields{}; // (the marks' values by index, as floats)
+        uint32_t fog_bits = 0;                                 // (PORT_FRAME_INTERP_FOG's)
+        bool in_world = false; // the draws now are the world's (its camera's, not the arm's or another projection's)
+        bool sky = false;      // ... and the sky's (PORT_FRAME_INTERP_SKY)
+        bool on = false;       // this world's fog volumetric
+        Fog fog;               // (on: the world's camera and time; the place of its target, from the draws)
+        double before_s = -1.0; // (the last world's time)
+    } fog_;
+
+    void fog_mark(uint64_t value) {
+        const uint32_t index = uint32_t(value >> 32) & 0xFF, v = uint32_t(value);
+        if (index == PORT_FRAME_INTERP_HEADER || index == PORT_FRAME_INTERP_SKY) {
+            flush_batch(); // (the GIF's primitives so far are drawn as what they were: the world's, the sky's or neither)
+        }
+        if (index != PORT_FRAME_INTERP_HEADER) {
+            if (index < fog_.fields.size()) {
+                memcpy(&fog_.fields[index], &v, sizeof(v));
+            }
+            fog_.sky = index == PORT_FRAME_INTERP_SKY ? v != 0 : fog_.sky;
+            fog_.fog_bits = index == PORT_FRAME_INTERP_FOG ? v : fog_.fog_bits;
+            return;
+        }
+        if (v == PORT_FRAME_INTERP_END) {
+            fog_.in_world = fog_.sky = fog_.on = false;
+            return;
+        }
+        const uint32_t projection = v & 0xFF, mode = (v >> 8) & 0xFF;
+        // (the world's own camera, or the mirror drawn into the frame by it: mode 1, map 041; not the arm's, mode 2,
+        // nor another projection's, the reflection's 256x256 view)
+        fog_.in_world = v != PORT_FRAME_INTERP_ARM && projection == 0 && mode < 2;
+        if (!fog_.in_world || mode != 0) {
+            return;
+        }
+        const bool was_on = fog_.on;
+        fog_.on = fog_on_ && (fog_.fog_bits >> 24) == PORT_FOG_VOLUMETRIC;
+        if (!fog_.on) {
+            return;
+        }
+        Fog &f = fog_.fog;
+        const float *view = &fog_.fields[PORT_FRAME_INTERP_VIEW]; // (the columns' x, y, z, then the translation)
+        for (size_t row = 0; row < 3; row++) {
+            for (size_t col = 0; col < 3; col++) {
+                f.camera.world_to_view[row * 4 + col] = view[col * 3 + row];
+            }
+            f.camera.world_to_view[row * 4 + 3] = view[9 + row];
+        }
+        for (int i = 0; i < 6; i++) {
+            f.camera.screen[size_t(i)] = fog_.fields[size_t(PORT_FRAME_INTERP_SCREEN + i)];
+        }
+        if (!was_on) {
+            // (the world's first header this frame: its time, and the frame before's, long ago where it was not on)
+            f.time_s = double(vblank_) / 60.0;
+            f.before_s = fog_.before_s >= 0.0 && f.time_s - fog_.before_s < 0.2 ? fog_.before_s : f.time_s - 1.0 / 30.0;
+            fog_.before_s = f.time_s;
+        }
+    }
+
+    // Whether a draw with fog is drawn with the volumetric fog: the world's, but the sky's (and only where it tests
+    // Z: a draw that does not is no place in the world)
+    bool fog_volume(const DrawState &s) const {
+        return fog_.on && fog_.in_world && !fog_.sky && bits(s.prim, 5, 1) && bits(s.test, 16, 1);
+    }
+
+    // A draw with the volumetric fog into a target placed at placed: the scene's fog from the world's (its camera and
+    // time; where its pixels lie on the GS's screen, s's XYOFFSET)
+    void fog_drawn(const Placed &placed, const DrawState &s) {
+        Fog &f = fog_.fog;
+        f.on = true;
+        f.scale = {float(scale_[0]), float(scale_[1])};
+        f.origin = {float(bits(s.xyoffset, 0, 16)) / 16.0f - float(placed.x),
+                    float(bits(s.xyoffset, 32, 16)) / 16.0f - float(placed.y)};
+        scene_.fog = f;
+        counts_.fog_draws++;
+        if (fog_log_ && counts_.fog_draws % 20000 == 1) {
+            const auto &v = f.camera.world_to_view;
+            const float eye[3] = {-(v[0] * v[3] + v[4] * v[7] + v[8] * v[11]), -(v[1] * v[3] + v[5] * v[7] + v[9] * v[11]),
+                                  -(v[2] * v[3] + v[6] * v[7] + v[10] * v[11])};
+            fprintf(stderr, "[scn] fog: eye %.0f %.0f %.0f, view's down %.2f %.2f %.2f, screen %g %g %g %g cz %g az %g, "
+                            "origin %g %g scale %g %g, time %.3f (before %.3f)\n",
+                    eye[0], eye[1], eye[2], v[4], v[5], v[6], f.camera.screen[0], f.camera.screen[1],
+                    f.camera.screen[2], f.camera.screen[3], f.camera.screen[4], f.camera.screen[5], f.origin[0],
+                    f.origin[1], f.scale[0], f.scale[1], f.time_s, f.before_s);
+        }
+    }
+    // (developers', KF4_SCN_FOG=0: never volumetric, whatever the game asks; KF4_SCN_FOG_LOG=1: its camera now and then)
+    const bool fog_on_ = !getenv("KF4_SCN_FOG") || strtol(getenv("KF4_SCN_FOG"), nullptr, 10) != 0;
+    const bool fog_log_ = getenv("KF4_SCN_FOG_LOG") && strtol(getenv("KF4_SCN_FOG_LOG"), nullptr, 10) != 0;
 
     // ---- Targets ----
     ImageHandle make_target_image(uint32_t width, uint32_t height, bool depth, uint32_t psm) {
@@ -5172,6 +5285,10 @@ private:
         bool tme = bits(s.prim, 4, 1) != 0;
         uint32_t flags = texture_flags(s, b.texture);
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
+        if (fog_volume(s)) {
+            flags |= F_SCN_FOG_VOLUME;
+            fog_drawn(placed, s);
+        }
         flags |= fba ? F_FBA : 0;
         flags |= blend.flags & ~0x80000000u;
         flags |= date && !shadow ? F_DATE | (datm ? F_DATM : 0) : 0;
@@ -5724,6 +5841,7 @@ private:
     struct Counts {
         uint64_t frame_steps_dropped = 0;
         uint64_t held_renames = 0;
+        uint64_t fog_draws = 0; // (the draws with the volumetric fog: fog_volume)
         uint64_t held_frames = 0, held_steps = 0, held_dead = 0, held_drawn = 0, held_snapshots = 0,
                  held_depth_read_late = 0, hold_refused_none = 0, hold_refused_target = 0, hold_refused_depth = 0,
                  hold_refused_first = 0;

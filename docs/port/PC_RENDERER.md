@@ -182,6 +182,36 @@ samples, about 140 MB each), and there are three sets (kf4-pc's, the pump's, the
 holds 2.4 GB. Less needs fewer or smaller copies (only the rows of the buffer shown, or only the surfaces the walk
 draws on).
 
+## Volumetric fog (2026-11-27; `--fog`, the Fog row)
+
+The PS2 fogs each vertex: `F = near + far / w` from the model's fog block, clamped to 0..255 and blended toward the
+fog colour (`PCR_TEXTURE_AND_FOG`). **Fog: Volumetric** (the scene renderer only; PS2 stays the default, as the look
+above says) keeps that F at each pixel as the base and varies it by the density along the view's ray: what F leaves,
+`F / 255`, becomes `(F / 255)^m`, where m is the mean density at three jittered places from 0.4 to 1.0 of the way to
+the pixel. The density is thicker below the eye (it thins by e over 0.35 of a noise cell's height, clamped) and is
+varied by a drifting, repeating 3D value noise (cells of 1500 world units, strength 0.6). Where m is 1 the picture is
+the PS2's byte for byte (checked at 000, 009 and 024 with `KF4_FOG_LOOK=1,0,0`), and where the PS2's fog is whole it
+stays whole, so each map keeps its own colour, start and end.
+
+- **Which draws**: the world's (the camera marks of `game/frame_interp.c`, mode 0 or the mirror's mode 1) with FGE
+  and a Z test, but not the sky's records (`PORT_FRAME_INTERP_SKY`). They get `PCR_F_SCN_FOG_VOLUME` (the depth
+  rule's `PCR_F_ZWRITE` bit, unused by the scene). The arm, the held item, the sky, the HUD and the screen passes keep
+  the PS2's fog. The builder flushes its open batch at each camera or sky mark, so a batch is never judged by the mark
+  after it (the sky's triangles were fogged as the world's until this).
+- **Why per draw, not a pass**: the plan's full-screen pass over the world's depth was built first and dropped. It
+  fogged a flame by the wall behind it (009's fire lost two thirds of its light), the sky dome and every map record by
+  the player's fog block (000's sky went black), and holding the see-through draws back until after it changed the
+  draw order. A draw's own F already carries its record's block and colour, and the fire's use of fog as a colour.
+- **Where it lives**: the maths in `port/include/port/fog.h` (tested by `tests/fog_test.c`), the shader in
+  `pcr_prim.h`'s `SCN_FOG_VOLUME` (every scene shader is built with it: no new pipelines, the flag picks the path),
+  the camera and time in `scn::Scene::fog` (`scn_build.cpp`'s `fog_mark`), and its uniform (set 1, binding 13) and
+  32^3 noise (binding 14) bound with every draw's set 1 (`scn_draw.cpp`'s `prepare_fog`, `bind_fog`). Pictures between
+  use their own camera and time (`PictureDraw::camera`, `t`), so the drift is smooth at any rate.
+- **Cost** (owner's settings, real window, one 30 s run each): GPU time a picture 1.32 -> 1.36 ms at 009, 0.89 ->
+  0.93 ms at 063 (about 3-4%, all in the native draws' fragment work); the same pictures a second.
+- **Developers'**: `KF4_FOG_LOOK=cell,strength,height,dx,dy,dz` (`1,0,0`: the PS2's), `KF4_SCN_FOG=0` (never
+  volumetric), `KF4_SCN_FOG_LOG=1` (the camera now and then).
+
 ## Drivers without synchronization2 (2026-11-22)
 
 Granite makes no device without `VK_KHR_synchronization2` (Vulkan 1.3's core; an extension before it): "KHR_synchronization2

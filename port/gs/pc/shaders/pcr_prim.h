@@ -643,6 +643,65 @@ bool pcr_exact_depth() {
 }
 #endif
 
+#ifdef SCN_FOG_VOLUME
+// The scene renderer's volumetric fog (port/include/port/fog.h; scn_draw.cpp's bind_fog), on the world's draws with fog
+// (PCR_F_SCN_FOG_VOLUME): each keeps its own fog value F, the PS2's at this pixel, as the base, and what that leaves of
+// the colour, F / 255, is raised to the mean density along the view's ray (thicker low down, a drifting noise), taken at
+// three places from the middle of the ray to here, where most of the base's fog lies: (F / 255)^m is the fog the
+// base's optical depth times m makes. Where m is 1 it is the PS2's.
+layout(set = 1, binding = 13, std140) uniform ScnFog {
+    vec4 view[3]; // the world to the view: rows of R, each with t in w (view = R world + t)
+    vec4 ray;     // the view's ray at target pixel p: (p.x ray.x + ray.y, p.y ray.z + ray.w, 1)
+    vec4 z;       // cz, az (Z = cz + az / w), 1 / the height (in noise cells) the fog thins by e over, the noise's strength
+    vec4 drift;   // the noise's place (in its texture's repeats: it drifts), 1 / a noise cell's size in the world
+} u_scn_fog;
+layout(set = 1, binding = 14) uniform sampler3D u_scn_noise; // value noise that repeats, 0 to 1, a cell a texel
+
+const float scn_noise_cells = 32.0; // (u_scn_noise's size: scn_draw.cpp's make_fog_noise)
+
+// The density factor at a place (world units) height above the eye
+float scn_fog_density(vec3 at, float height) {
+    vec3 cells = at * u_scn_fog.drift.w;
+    float n = texture(u_scn_noise, cells / scn_noise_cells + u_scn_fog.drift.xyz).r * 0.65 +
+              texture(u_scn_noise, cells * (2.03 / scn_noise_cells) - u_scn_fog.drift.zxy * 1.7).r * 0.35;
+    float thick = exp(-clamp(height * u_scn_fog.drift.w * u_scn_fog.z.z, -1.1, 1.1)); // (thicker below the eye)
+    return clamp(thick * (1.0 + u_scn_fog.z.w * (2.0 * n - 1.0)), 0.05, 4.0);
+}
+
+// F (the PS2's, unclamped) made volumetric
+float scn_fog_volume(float f) {
+    float left = clamp(f, 0.0, 255.0) / 255.0;
+    // (this pixel's Z as its depth has it: pcr_common.h's pcr_depth)
+    float z = (pc.flags & PCR_F_PIXEL_CLAMP) != 0u ? gl_FragCoord.z * float(pc.zmax) : gl_FragCoord.z / pc.zscale;
+    if (left <= 0.0 || left >= 1.0 || z <= u_scn_fog.z.x) {
+        return f; // (no fog, all fog, or no place)
+    }
+    float w = u_scn_fog.z.y / (z - u_scn_fog.z.x);
+    mat3 r = mat3(u_scn_fog.view[0].xyz, u_scn_fog.view[1].xyz, u_scn_fog.view[2].xyz); // (R's transpose)
+    vec3 eye = -(r * vec3(u_scn_fog.view[0].w, u_scn_fog.view[1].w, u_scn_fog.view[2].w));
+    vec3 dir = r * vec3(gl_FragCoord.x * u_scn_fog.ray.x + u_scn_fog.ray.y, gl_FragCoord.y * u_scn_fog.ray.z + u_scn_fog.ray.w, 1.0);
+    // (the places jittered by the pixel, another way each picture: interleaved gradient noise, Jimenez 2014)
+    float frame = floor(fract(u_scn_fog.drift.x * 13.0) * 64.0);
+    float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * frame, vec2(0.06711056, 0.00583715))));
+    float m = 0.0;
+    for (int i = 0; i < 3; i++) {
+        vec3 rel = dir * (w * (0.4 + 0.2 * (float(i) + j))); // (from the eye: 0.4 to 1.0 of the way)
+        m += scn_fog_density(eye + rel, -rel.y); // (the world's up is -Y)
+    }
+    return m == 3.0 ? f : 255.0 * pow(left, m / 3.0); // (every density 1: the PS2's, exactly)
+}
+#endif
+
+// The fog value at this pixel: the interpolated F, or (SCN_FOG_VOLUME) that made volumetric
+float pcr_fog_value() {
+#ifdef SCN_FOG_VOLUME
+    if ((pc.flags & PCR_F_SCN_FOG_VOLUME) != 0u) {
+        return scn_fog_volume(v_fog);
+    }
+#endif
+    return v_fog;
+}
+
 // The texture function (TFX, TCC) on the texture's colour at this pixel and the vertex colour vc, then the fog, into c:
 // the GS's integers (a macro, so that the shaders that use it once are as they were)
 #define PCR_TEXTURE_AND_FOG(c, vc) \
@@ -672,7 +731,7 @@ bool pcr_exact_depth() {
         /* the GS's fog as paraLLEl-GS has it: F rounded, the colour the fog colour plus (C - FOGCOL) * F / 256 \
            rounded (F 255 leaves a colour as it is). Truncated, every fogged pixel came out a step darker than the \
            GS's: at map 000 against --renderer gs, 11% of pixels exact before, 46% after, 2026-11-21 */ \
-        int f = int(roundEven(clamp(v_fog, 0.0, 255.0))); \
+        int f = int(roundEven(clamp(pcr_fog_value(), 0.0, 255.0))); \
         ivec3 fog = ivec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
         c.rgb = uvec3(fog + (((ivec3(c.rgb) - fog) * f + 128) >> 8)); \
     }

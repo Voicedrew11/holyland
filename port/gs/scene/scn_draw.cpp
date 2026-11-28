@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -33,6 +34,44 @@ constexpr uint32_t first_binding = 10; // (set 1's: pcr_prim.h's u_first, SCN_FI
 constexpr uint32_t jobs_binding = 11, placed_binding = 12; // (set 1's: scn_placed.h's, SCN_PLACED)
 constexpr uint32_t vertex_input_count = pcr::vertex_input_count;
 constexpr uint32_t scn_alpha_one = 0x1; // (pcr_common.h's SCN_ALPHA_ONE)
+constexpr uint32_t fog_binding = 13, fog_noise_binding = 14; // (set 1's: pcr_prim.h's SCN_FOG_VOLUME)
+constexpr uint32_t fog_noise_cells = 32;                    // (u_scn_noise's size: pcr_prim.h's scn_noise_cells)
+
+// pcr_prim.h's ScnFog (std140)
+struct FogUniform {
+    float view[3][4]; // the world to the view: rows of R, each with t
+    float ray[4];     // the view's ray at target pixel p: (p.x ray.x + ray.y, p.y ray.z + ray.w, 1)
+    float z[4];       // cz, az, 1 / the height (noise cells) the fog thins by e over, the noise's strength
+    float drift[4];   // the noise's place (its texture's repeats), 1 / a noise cell's size in the world
+};
+
+// (the volumetric fog's look, in the world's units (the eye is 220 over the floor): a noise cell, how much the noise
+// thickens and thins it, the height in cells over which it thins by e (0: the same at every height), and its drift in
+// cells a second; developers': KF4_FOG_LOOK=cell,strength,height,drift_x,drift_y,drift_z to try others, and
+// KF4_FOG_LOOK=1,0,0 the PS2's fog exactly)
+struct FogLook {
+    float cell = 1500.0f, strength = 0.6f, height = 0.35f;
+    float drift[3] = {0.05f, 0.01f, 0.03f};
+};
+FogLook fog_look() {
+    FogLook look;
+    const char *v = getenv("KF4_FOG_LOOK");
+    float *fields[6] = {&look.cell, &look.strength, &look.height, &look.drift[0], &look.drift[1], &look.drift[2]};
+    for (float *field : fields) {
+        if (!v || !*v) {
+            break;
+        }
+        char *end = nullptr;
+        const float value = strtof(v, &end);
+        if (end == v) {
+            break; // (not a number: the rest left as they are)
+        }
+        *field = value;
+        v = *end == ',' ? end + 1 : end;
+    }
+    look.cell = std::max(look.cell, 1.0f);
+    return look;
+}
 
 uint32_t native_slot(pcr::NativeProgram program) {
     return program == pcr::NativeProgram::vu1_000   ? 0
@@ -93,6 +132,7 @@ Drawer::Drawer(Device &device, pcr::GpuTimes &times) : device_(device), times_(t
     fprintf(stderr, "[scn] depth: %s%s\n", port_scene_depth(mode)->name,
             !exact_z_ && mode != PORT_SCENE_DEPTH_GPU ? " asked, the GPU's here (no depth clamp or 64-bit integers)" : "");
     make_programs();
+    make_fog_noise();
     if (const char *log = getenv("KF4_SCN_RUNS_LOG")) {
         runs_log_ = fopen(log, "w");
         if (runs_log_) {
@@ -156,6 +196,12 @@ void Drawer::make_programs() {
     for (uint32_t b : {0u, 1u, 2u, 3u, 4u, trace_binding, records_binding}) {
         frag.sets[1].meta[b].array_size = 1;
     }
+    // (the volumetric fog's, SCN_FOG_VOLUME: bind_fog)
+    frag.sets[1].uniform_buffer_mask |= 1u << fog_binding;
+    frag.sets[1].sampled_image_mask |= 1u << fog_noise_binding;
+    frag.sets[1].fp_mask |= 1u << fog_noise_binding;
+    frag.sets[1].meta[fog_binding].array_size = 1;
+    frag.sets[1].meta[fog_noise_binding].array_size = 1;
     frag.sets[0].storage_buffer_mask = 1u << walk_clut_binding;
     frag.sets[0].meta[walk_clut_binding].array_size = 1;
     frag.sets[0].sampler_mask = 1u << walk_sampler_binding;
@@ -172,7 +218,12 @@ void Drawer::make_programs() {
 // (exact Z: the shader made with PCR_EXACT_Z, <name>_xz, where it is on)
 #define SCN_PCR_SHADER_XZ(name, layout)                                                                                \
     (exact_z_ ? SCN_PCR_SHADER(name##_xz, layout) : SCN_PCR_SHADER(name, layout))
-    Shader *fs = SCN_PCR_SHADER_XZ(pcr_prim_frag, &frag), *efs = SCN_PCR_SHADER_XZ(pcr_prim_early_frag, &frag);
+    // (the PC renderer's fragment shaders as the scene builds them: scn_shaders.h's scn_pcr_*)
+#define SCN_PLAIN_SHADER(name, layout)                                                                                 \
+    (exact_z_ ? device_.request_shader(scn_spv_scn_##name##_xz, sizeof(scn_spv_scn_##name##_xz), layout)              \
+              : device_.request_shader(scn_spv_scn_##name, sizeof(scn_spv_scn_##name), layout))
+    Shader *fs = SCN_PLAIN_SHADER(pcr_prim_frag, &frag), *efs = SCN_PLAIN_SHADER(pcr_prim_early_frag, &frag);
+#undef SCN_PLAIN_SHADER
     Shader *idfs = device_.request_shader(scn_spv_scn_first_draw_frag, sizeof(scn_spv_scn_first_draw_frag), &frag);
     Shader *firstfs = device_.request_shader(scn_spv_scn_prim_first_frag, sizeof(scn_spv_scn_prim_first_frag), &first);
     Shader *vs[size_t(Program::count)] = {
@@ -620,6 +671,85 @@ void Drawer::log_scene(const Scene &scene, const Counts &b) {
     fprintf(runs_log_, "\n");
 }
 
+void Drawer::make_fog_noise() {
+    // value noise that repeats every fog_noise_cells: a random value a texel, read with linear filtering and wrapped
+    // (the lattice's values smoothed once across their neighbours, so that the cells' corners do not show)
+    constexpr uint32_t n = fog_noise_cells;
+    std::vector<float> raw(size_t(n) * n * n);
+    uint32_t state = 0x9E3779B9u;
+    for (float &v : raw) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        v = float(state & 0xFFFFu) / 65535.0f;
+    }
+    std::vector<uint8_t> texels(raw.size());
+    auto at = [&](uint32_t x, uint32_t y, uint32_t z) { return raw[(size_t(z % n) * n + y % n) * n + x % n]; };
+    for (uint32_t z = 0; z < n; z++) {
+        for (uint32_t y = 0; y < n; y++) {
+            for (uint32_t x = 0; x < n; x++) {
+                float sum = 2.0f * at(x, y, z) + at(x + 1, y, z) + at(x + n - 1, y, z) + at(x, y + 1, z) +
+                            at(x, y + n - 1, z) + at(x, y, z + 1) + at(x, y, z + n - 1);
+                float v = std::clamp((sum / 8.0f - 0.5f) * 1.8f + 0.5f, 0.0f, 1.0f); // (its contrast back)
+                texels[(size_t(z) * n + y) * n + x] = uint8_t(std::lround(v * 255.0f));
+            }
+        }
+    }
+    ImageCreateInfo info = ImageCreateInfo::immutable_3d_image(n, n, n, VK_FORMAT_R8_UNORM);
+    ImageInitialData data = {texels.data(), 0, 0};
+    fog_noise_ = device_.create_image(info, &data);
+    if (!fog_noise_) {
+        // (a 3D image the shaders can be bound with all the same: a flat fog)
+        fprintf(stderr, "[scn] no image for the volumetric fog's noise: the fog drawn without it\n");
+        const uint8_t half = 128;
+        info = ImageCreateInfo::immutable_3d_image(1, 1, 1, VK_FORMAT_R8_UNORM);
+        data = {&half, 0, 0};
+        fog_noise_ = device_.create_image(info, &data);
+    }
+}
+
+void Drawer::prepare_fog(const Scene &scene) {
+    static const FogLook look = fog_look();
+    FogUniform u = {};
+    const Fog &fog = scene.fog;
+    // (a picture between's camera, at its time; else the frame's)
+    const FogCamera &camera = picture_ ? picture_->camera : fog.camera;
+    const auto &s = camera.screen; // sx, sy, cx, cy, cz, az
+    if (fog.on && s[0] != 0.0f && s[1] != 0.0f && fog.scale[0] > 0.0f && fog.scale[1] > 0.0f) {
+        const double t = picture_ ? double(picture_->t) : 1.0;
+        const double time_s = fog.before_s + (fog.time_s - fog.before_s) * t;
+        for (size_t row = 0; row < 3; row++) {
+            for (size_t col = 0; col < 4; col++) {
+                u.view[row][col] = camera.world_to_view[row * 4 + col];
+            }
+        }
+        // (a target pixel's middle p is the GS's (p - 0.5) / scale + origin: X = sx x / z + cx)
+        for (size_t a = 0; a < 2; a++) {
+            u.ray[2 * a] = 1.0f / (fog.scale[a] * s[a]);
+            u.ray[2 * a + 1] = (fog.origin[a] - 0.5f / fog.scale[a] - s[2 + a]) / s[a];
+        }
+        u.z[0] = s[4];
+        u.z[1] = s[5];
+        u.z[2] = look.height > 0.0f ? 1.0f / look.height : 0.0f;
+        u.z[3] = look.strength;
+        // (the noise repeats every fog_noise_cells: its place wrapped there, so that it drifts on without a jump)
+        for (int a = 0; a < 3; a++) {
+            u.drift[a] = float(std::fmod(time_s * double(look.drift[a]) / double(fog_noise_cells), 1.0));
+        }
+        u.drift[3] = 1.0f / look.cell;
+    }
+    BufferCreateInfo info = {};
+    info.domain = BufferDomain::LinkedDeviceHost;
+    info.size = sizeof(u);
+    info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    fog_uniform_ = device_.create_buffer(info, &u);
+}
+
+void Drawer::bind_fog(CommandBuffer &c) {
+    c.set_uniform_buffer(1, fog_binding, fog_uniform_ ? *fog_uniform_ : *no_clut_);
+    c.set_texture(1, fog_noise_binding, fog_noise_->get_view(), StockSampler::LinearWrap);
+}
+
 void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *picture,
                     const std::vector<uint8_t> *left_out, const Substitutes *substitutes) {
     picture_ = picture;
@@ -630,6 +760,7 @@ void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *pic
     counts_.picture_scenes += picture ? 1 : 0;
     prepare(scene);
     prepare_placing(scene);
+    prepare_fog(scene);
     bool after_pass = false;
     full_barrier(c); // (what was submitted before: the targets' last scene, uploads into images)
     place_vertices(c);
@@ -943,6 +1074,7 @@ void Drawer::bind_records(const Pass &pass, const Draw &d, CommandBuffer &c) {
     c.set_storage_buffer(1, placed_binding, p.placed ? *p.placed : *zeros_);
     c.set_storage_buffer(1, merged_binding, *zeros_);
     c.set_storage_buffer(1, planes_binding, *zeros_);
+    bind_fog(c);
     c.set_texture(1, 0, dummy_uint_->get_view(), StockSampler::NearestClamp);
     c.set_texture(1, 1, dummy_float_->get_view(), StockSampler::NearestClamp);
     c.set_texture(1, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
@@ -986,6 +1118,7 @@ void Drawer::bind_own(const Scene &scene, const Pass &pass, const Draw &d, const
     c.set_storage_buffer(1, records_binding, *zeros_);
     c.set_storage_buffer(1, merged_binding, *zeros_);
     c.set_storage_buffer(1, planes_binding, *zeros_);
+    bind_fog(c);
     c.set_texture(1, 0, m.texels ? m.texels->get_view() : dummy_uint_->get_view(), StockSampler::NearestClamp);
     c.set_texture(1, 1, m.surface ? image(m.surface).get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
     if (m.sampled && m.sampler) {

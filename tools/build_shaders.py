@@ -47,6 +47,10 @@ def find_glslang(given):
 SCENE_SHADERS = os.path.join(ROOT, "port", "gs", "scene", "shaders")
 SCENE_OUT = os.path.join(ROOT, "port", "gs", "scene", "scn_shaders.h")
 SCENE_AGAIN = [
+    # (the PC renderer's fragment shaders as the scene draws with them, its draws with their own push constants: with the
+    # scene's defines below)
+    (os.path.join(PC_SHADERS, "pcr_prim.frag"), "scn_pcr_prim_frag", []),
+    (os.path.join(PC_SHADERS, "pcr_prim_early.frag"), "scn_pcr_prim_early_frag", []),
     # (DATE's shadows drawn where their triangle came first: pcr_prim.h's SCN_FIRST_DRAW)
     (os.path.join(PC_SHADERS, "pcr_prim.frag"), "scn_prim_first_frag", ["-DSCN_FIRST_DRAW"]),
     # (the PC renderer's shaders and these two reading a draw's fields from the scene's records, PCR_RECORDS:
@@ -70,8 +74,9 @@ SCENE_AGAIN = [
 # placed native draws work out their triangles' planes in the vertex stage, pcr_nd000.vert's scn_corner)
 SCENE_AGAIN += [(path, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for path, symbol, defines in SCENE_AGAIN
                 if not symbol.endswith("_empty")]
-# (the scene renderer never traces a pixel: its shaders without the trace, writing no memory, pcr_prim.h's SCN_NO_TRACE)
-SCENE_AGAIN = [(path, symbol, defines + ["-DSCN_NO_TRACE"]) for path, symbol, defines in SCENE_AGAIN]
+# (the scene renderer never traces a pixel: its shaders without the trace, writing no memory, pcr_prim.h's SCN_NO_TRACE;
+# and its world's fog can be volumetric: SCN_FOG_VOLUME, a uniform and a texture more, used where a draw asks)
+SCENE_AGAIN = [(path, symbol, defines + ["-DSCN_NO_TRACE", "-DSCN_FOG_VOLUME"]) for path, symbol, defines in SCENE_AGAIN]
 
 
 def main():

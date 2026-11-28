@@ -123,6 +123,19 @@ struct Pass {
     bool picture = false;      // (the picture's: the frame's layers drawn over it, timed as the picture)
 };
 
+// The volumetric fog (port/fog.h; pcr_prim.h's SCN_FOG_VOLUME): the world's draws with fog (PCR_F_SCN_FOG_VOLUME)
+// have their own fog varied at each pixel by the density along the view's ray, from the world's camera
+struct FogCamera {
+    std::array<float, 12> world_to_view{}; // rows of the rotation, each with its translation: view = R world + t
+    std::array<float, 6> screen{};         // sx, sy, cx, cy, cz, az: X = sx x / z + cx, Y = sy y / z + cy, Z = cz + az / z
+};
+struct Fog {
+    bool on = false;                                  // (some draw of the scene's has it)
+    FogCamera camera;                                 // the frame's (a picture between's own: Drawer::PictureDraw)
+    std::array<float, 2> origin{}, scale{1.0f, 1.0f}; // target pixel p's middle at the GS's (p - 0.5) / scale + origin
+    double time_s = 0.0, before_s = 0.0;              // the game frame's time and the frame before's
+};
+
 // What is done outside the passes, between them
 struct Op {
     enum class Kind : uint8_t {
@@ -154,6 +167,7 @@ struct Scene {
     std::vector<Draw> draws;
     std::vector<pcr::Vertex> vertices;
     std::vector<std::array<uint32_t, 256>> cluts;
+    Fog fog;
 
     bool empty() const {
         return steps.empty();
@@ -166,6 +180,7 @@ struct Scene {
         draws.clear();
         vertices.clear();
         cluts.clear();
+        fog = Fog();
     }
 };
 

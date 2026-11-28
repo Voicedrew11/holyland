@@ -47,6 +47,7 @@ typedef struct {
     int adaptive_sync;     /* for a VRR screen: FIFO, rates under its own (port_options.adaptive_sync; off) */
     int draw_distance;     /* the opt-in longer view: PORT_DRAW_DISTANCE_ (port_options.draw_distance) */
     int draw_distance_sky; /* with it, the sky's fog pushed out too (port_options.draw_distance_sky) */
+    int fog;               /* how the 3D world is fogged: PORT_FOG_*, port/fog.h (port_options.fog; "ps2") */
     int native_scale;      /* the renderer's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
     int native_widescreen; /* with widescreen, the renderer's picture drawn wider (port_options.native_widescreen) */
     int antialias;         /* the picture's anti-aliasing: PORT_AA_*, port/antialias.h (port_options.antialias) */

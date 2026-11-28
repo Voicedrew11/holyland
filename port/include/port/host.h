@@ -243,6 +243,14 @@ int port_frame_interp(void);
 #define PORT_FRAME_INTERP_FRAME_ONLY 22  /* 1: the world's vertices from here are drawn in the frame only, not in the
                                             pictures between (the near cut's pieces of a natively drawn map record,
                                             whose triangles the pictures draw whole); 0: no longer */
+#define PORT_FRAME_INTERP_FOG_NEAR 23 /* 23-25, with the world's camera (mode 0), before its header: the map's fog now */
+#define PORT_FRAME_INTERP_FOG_FAR 24  /* (map_draw_state.current_fog_block): its near and far terms (floats: F = near + */
+#define PORT_FRAME_INTERP_FOG 25      /* far / w, port/fog.h), its colour (bits 0-23, FOGCOL's) | PORT_FOG_* << 24 */
+
+/* port_fog(): how the 3D world is fogged, PORT_FOG_* (port/fog.h): --fog, or the player menu's Fog. With
+   PORT_FOG_VOLUMETRIC the world is marked (as for the pictures between, above) whatever the frame rate, so that the
+   scene renderer knows where the world ends, its camera and its fog (PORT_FRAME_INTERP_FOG) */
+int port_fog(void);
 
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
    default) unless --draw-distance or the player menu's Graphics tab says 1.5, 2, 4 or max

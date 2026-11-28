@@ -7,7 +7,7 @@
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false, "interlaced_menus": false,
                     "widescreen": "off", "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
                     "adaptive_sync": false,
-                    "draw_distance": "1", "draw_distance_sky": "ps2",
+                    "draw_distance": "1", "draw_distance_sky": "ps2", "fog": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "off", "native_lod": "scale",
                     "native_aniso": 1, "native_2d": "smooth", "font": "ps2", "glyphs": "auto",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "ps2",
@@ -60,6 +60,7 @@
 
 #include "cJSON.h"
 #include "port/antialias.h"
+#include "port/fog.h"
 #include "port/widescreen.h"
 #include "port/audio.h"
 #include "port/automap.h"
@@ -104,6 +105,7 @@ PortSettings port_settings = {
     .native_widescreen = 1,
     .native_aniso = 1,
     .antialias = PORT_AA_OFF,
+    .fog = PORT_FOG_PS2,
     .native_2d = 1, /* GSN_2D_SMOOTH */
     .font = 0,      /* GSN_FONT_PS2: the disc's */
     .glyphs = PORT_GLYPHS_AUTO, /* what the player used last */
@@ -434,6 +436,13 @@ void port_settings_load(void) {
         }
     }
     {
+        int fog = port_fog_from_name(read_string(display, "fog"));
+
+        if (fog >= 0) {
+            s->fog = fog;
+        }
+    }
+    {
         const char *scale = read_string(display, "native_scale");
 
         if (scale != NULL) {
@@ -643,6 +652,9 @@ void port_settings_load(void) {
     if (!port_options.draw_distance_sky_forced) {
         port_options.draw_distance_sky = s->draw_distance_sky;
     }
+    if (!port_options.fog_forced) {
+        port_options.fog = s->fog;
+    }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
     }
@@ -815,6 +827,7 @@ void port_settings_save(void) {
     put(display, "adaptive_sync", cJSON_CreateBool(s->adaptive_sync));
     put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
     put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
+    put(display, "fog", cJSON_CreateString(port_fog_mode(s->fog) ? port_fog_mode(s->fog)->name : "ps2"));
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
     put(display, "antialias", cJSON_CreateString(port_antialias(s->antialias) ? port_antialias(s->antialias)->name : "off"));
