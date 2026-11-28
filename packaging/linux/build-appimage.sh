@@ -102,5 +102,7 @@ mkdir -p "$APPDIR/usr/share/doc/$APP_ID"
 echo "==> appimagetool"
 TOOL="$("$ROOT/packaging/fetch.sh" appimagetool)"
 chmod +x "$TOOL"
-ARCH=x86_64 "$TOOL" --no-appstream --comp zstd "$APPDIR" "$OUT/$NAME-$VERSION-x86_64.AppImage"
+# -no-xattrs: files copied from a Fedora tree carry SELinux labels, and with them mksquashfs writes extended
+# symlink inodes that RecompLauncher's SquashFS reader (backhand) can't parse, so it won't unpack the image (issue 270)
+ARCH=x86_64 "$TOOL" --no-appstream --comp zstd --mksquashfs-opt -no-xattrs "$APPDIR" "$OUT/$NAME-$VERSION-x86_64.AppImage"
 echo "done: $OUT/$NAME-$VERSION-x86_64.AppImage ($(du -h "$OUT/$NAME-$VERSION-x86_64.AppImage" | cut -f1))"
