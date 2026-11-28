@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "port/antialias.h"
+#include "port/fog.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
@@ -62,6 +63,13 @@ static double set_draw_distance(double distance) {
     return whole;
 }
 
+/* (the game's thread reads it, as it marks the world for the renderer: game/frame_interp.c) */
+static double set_fog(double fog) {
+    int mode = fog == PORT_FOG_VOLUMETRIC ? PORT_FOG_VOLUMETRIC : PORT_FOG_PS2;
+    port_settings.fog = port_options.fog = mode;
+    return mode;
+}
+
 /* settings.json keeps on (every kind the renderer draws) or off; a choice of kinds is for this run */
 static double set_native_draw(double kinds) {
     port_gs_set_native_draw((int)kinds);
@@ -113,6 +121,7 @@ static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
     [PORT_LIVE_NATIVE_SCALE] = {"native_scale", set_native_scale},
     [PORT_LIVE_FRAME_RATE] = {"frame_rate", set_frame_rate},
     [PORT_LIVE_DRAW_DISTANCE] = {"draw_distance", set_draw_distance},
+    [PORT_LIVE_FOG] = {"fog", set_fog},
     [PORT_LIVE_NATIVE_DRAW] = {"native_draw", set_native_draw},
     [PORT_LIVE_SKY] = {"sky", set_sky},
     [PORT_LIVE_ANTIALIAS] = {"antialias", set_antialias},

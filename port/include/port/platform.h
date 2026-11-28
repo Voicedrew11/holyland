@@ -165,6 +165,10 @@ typedef struct {
     int draw_distance_forced; /* --draw-distance: this run's, whatever settings.json says */
     int draw_distance_sky;
     int draw_distance_sky_forced; /* --draw-distance-sky */
+    /* --fog: how the 3D world is fogged (PORT_FOG_*, port/fog.h: ps2, the default, or volumetric, which the scene
+       renderer draws; the others keep the PS2's). Live from the player menu. */
+    int fog;
+    int fog_forced;
     /* The opt-in mods (port/include/port/host.h): off by default, turned on by their switch or
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */

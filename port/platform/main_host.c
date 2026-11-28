@@ -150,6 +150,9 @@
        --draw-distance-sky ps2|push
                          with --draw-distance, the sky keeps the PS2's fog (the default) or has its
                          fog pushed out as well
+       --fog ps2|volumetric
+                         the 3D world's fog: each vertex's, the PS2's (the default), or worked out at
+                         each pixel through a fog thicker low down and drifting (the scene renderer)
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --no-hit-jolt     the opt-in mod: a hard hit from an enemy does not throw the view down
        --auto-loot-gold  the opt-in mod: the gold an enemy drops when you kill it is automatically looted
@@ -217,11 +220,13 @@
    With a window and no pad script, settings.json (port/overlay/settings.c, the overlay's F1) fills in
    what the command line does not say. */
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "port/antialias.h"
+#include "port/fog.h"
 #include "port/automap.h"
 #include "port/cinematic.h"
 #include "port/data_dir.h"
@@ -328,7 +333,7 @@ static void usage(const char *program) {
             "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cinematic-camera] [--enemies-ignore] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer scene|pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
-            "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
+            "          [--antialias off|fxaa|smaa|smaa_t2x] [--fog ps2|volumetric] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-2d smooth|ps2] [--font sharp|ps2]\n"
             "          [--glyphs auto|original|playstation|xbox|keyboard] [--scene-depth high|medium|low|unsettled]\n"
@@ -409,6 +414,7 @@ static void parse_options(int argc, char **argv) {
     port_options.present_scaling = -1;
     port_options.present_sharpen = -1;
     port_options.antialias = PORT_AA_OFF;
+    port_options.fog = PORT_FOG_PS2;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
@@ -681,6 +687,13 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.draw_distance_sky_forced = 1;
+        } else if (strcmp(option, "--fog") == 0) {
+            port_options.fog = port_fog_from_name(value);
+            if (port_options.fog < 0) {
+                fprintf(stderr, "--fog wants ps2 or volumetric, not %s\n", value);
+                exit(2);
+            }
+            port_options.fog_forced = 1;
         } else if (strcmp(option, "--antialias") == 0) {
             port_options.antialias = port_antialias_from_name(value);
             if (port_options.antialias < 0) {
@@ -890,6 +903,32 @@ float port_draw_distance(void) {
     int level = port_options.draw_distance;
 
     return level > 0 && level < PORT_DRAW_DISTANCE_COUNT ? draw_distance_factors[level] : 1.0f;
+}
+
+int port_fog(void) {
+    return port_options.fog == PORT_FOG_VOLUMETRIC ? PORT_FOG_VOLUMETRIC : PORT_FOG_PS2;
+}
+
+/* (written by the menu's and the settings' thread, read by the renderer's: atomics; 0 until set, read as the standard) */
+static atomic_int fog_look[PORT_FOG_LOOK_COUNT];
+static atomic_int fog_look_set[PORT_FOG_LOOK_COUNT];
+
+int port_fog_look_now(int field) {
+    const PortFogLookField *f = port_fog_look_field(field);
+    if (f == NULL) {
+        return 0;
+    }
+    return atomic_load_explicit(&fog_look_set[field], memory_order_acquire)
+               ? atomic_load_explicit(&fog_look[field], memory_order_relaxed)
+               : f->standard;
+}
+
+void port_set_fog_look(int field, int value) {
+    if (port_fog_look_field(field) == NULL) {
+        return;
+    }
+    atomic_store_explicit(&fog_look[field], port_fog_look_clamped(field, value), memory_order_relaxed);
+    atomic_store_explicit(&fog_look_set[field], 1, memory_order_release);
 }
 
 int port_draw_distance_sky(void) {

@@ -11,13 +11,22 @@
    the HUD. FrameInterp_BeginArm and FrameInterp_EndWorld mark the arm and the held item (drawn later,
    in the world before the eye), which move only as the arm moves. A mark is a run of GS register writes of its own (PORT_GS_REG_FRAME_INTERP, an
    address the GS does not have), queued in the chain where the call is made. With the switch off
-   nothing is queued, and the chain is the PS2's. */
+   nothing is queued, and the chain is the PS2's.
+
+   The volumetric fog (--fog volumetric, port/fog.h) marks the world the same way at every frame rate: the scene
+   renderer draws its fog where the world ends (the first FrameInterp_EndWorld, before the screen passes and the depth's
+   clear for the arm), from the world's depth, by its camera, with the map's fog as it is now, which the world's camera
+   mark carries (PORT_FRAME_INTERP_FOG). */
 #include "common.h"
+#include "map/map.h"
 
 #include <string.h>
 
+#include "port/fog.h"
 #include "port/mouse_lead.h"
 #include "port/platform.h"
+
+extern MapDrawState map_draw_state;
 
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int reg, s64 value);
@@ -28,6 +37,11 @@ extern f32 view_screen_matrix[0x10]; /* view to screen */
 
 static int marking; /* between FrameInterp_BeginFrame and FrameInterp_EndWorld */
 static int sky;     /* FrameInterp_MarkSky's last */
+
+/* Whether the world is marked: for the pictures between, or for the volumetric fog */
+static int marks_wanted(void) {
+    return port_frame_interp() || port_fog() == PORT_FOG_VOLUMETRIC;
+}
 
 static void add_field(int index, u32 bits) {
     Packet_AddGsRegister(PORT_GS_REG_FRAME_INTERP, (s64)(((u64)index << 32) | bits));
@@ -55,7 +69,7 @@ void FrameInterp_BeginFrame(void) {
     } else {
         port_clock_stopped();
     }
-    marking = port_frame_interp();
+    marking = marks_wanted();
     sky = 0;
 }
 
@@ -64,7 +78,7 @@ void FrameInterp_BeginFrame(void) {
    of the sky by one move in the pictures between, so its strips cannot come apart. */
 void FrameInterp_MarkSky(int on) {
     on = on != 0;
-    if (!marking || on == sky || !port_frame_interp()) {
+    if (!marking || on == sky || !marks_wanted()) {
         return;
     }
     sky = on;
@@ -78,7 +92,7 @@ void FrameInterp_MarkSky(int on) {
    (port/gs/pc/shaders/pcr_nd000.vert), so it leaves the pieces out (PORT_FRAME_INTERP_FRAME_ONLY), else they were
    drawn twice. A record drawn the PS2 way keeps its pieces: it has nothing else. */
 void FrameInterp_MarkFrameOnly(int on) {
-    if (!marking || !port_frame_interp()) {
+    if (!marking || !marks_wanted()) {
         return;
     }
     Packet_BeginGsRegisters();
@@ -98,7 +112,7 @@ void FrameInterp_MarkCamera(int projection, int mode) {
     static const u8 screen_fields[6] = {0, 5, 8, 9, 10, 14};
     int i;
 
-    if (!marking || !port_frame_interp()) {
+    if (!marking || !marks_wanted()) {
         return;
     }
     if (mode != 2) {
@@ -118,13 +132,22 @@ void FrameInterp_MarkCamera(int projection, int mode) {
             add_float(PORT_FRAME_INTERP_SCREEN + i, view_screen_matrix[screen_fields[i]]);
         }
     }
+    if (projection == 0 && mode == 0) {
+        /* the map's fog now, as the world's models are fogged by it (their fog_block: VU1 0x3C's z and w, 0x3D's
+           FOGCOL; game/native_draw/native_draw.c), and how the renderer is to fog the world */
+        const MapFogBlockValues *fog = (const MapFogBlockValues *)&map_draw_state.current_fog_block;
+
+        add_float(PORT_FRAME_INTERP_FOG_NEAR, fog->unk08);
+        add_float(PORT_FRAME_INTERP_FOG_FAR, fog->unk0C);
+        add_field(PORT_FRAME_INTERP_FOG, (u32)(fog->unk10 & 0xFFFFFF) | (u32)port_fog() << 24);
+    }
     add_field(PORT_FRAME_INTERP_HEADER, (u32)(projection | (mode << 8)));
     Packet_EndGsRegisters();
 }
 
 /* Before Player_DrawArm: models in the world, by the camera of the world */
 void FrameInterp_BeginArm(void) {
-    marking = port_frame_interp();
+    marking = marks_wanted();
     if (!marking) {
         return;
     }
@@ -139,7 +162,7 @@ void FrameInterp_EndWorld(void) {
         return;
     }
     marking = 0;
-    if (!port_frame_interp()) {
+    if (!marks_wanted()) {
         return;
     }
     Packet_BeginGsRegisters();

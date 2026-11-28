@@ -31,3 +31,12 @@ It is a setting, **Fog: PS2 / Volumetric**. The project's rule (`docs/port/PC_RE
 - Speed: real window run with the owner's settings (`KF4_READ_SETTINGS=1`, copied `KF4_DATA_DIR`, `tests/newgame.pad`, `--no-audio --saves none`) at 009 and 063. Compare GPU time with fog on and off using the frame profiler, and check the `[stats]` lines. Space the runs out.
 - clang-tidy: none in the project (say so). Lint the patch lines only with `clang-tidy-diff` bugprone/analyzer.
 - Commit on the branch; no push.
+
+## What was built (2026-11-27): per draw, not a pass
+
+Steps 1, 2, 5 and 6 as planned (the maths went into `port/include/port/fog.h`, header-only, rather than `game/`; the
+marks carry the fog terms and mode beside the camera: `PORT_FRAME_INTERP_FOG_NEAR`, `_FAR`, `_FOG`). Steps 3 and 4
+were built as written and then replaced: the pass fogged flames by the wall behind them, fogged the sky and every
+record by the player's block, and holding see-through draws back changed the draw order. Instead each world draw
+keeps its own vertex fog and its fragment shader raises `F / 255` to the ray's mean density
+(`docs/port/PC_RENDERER.md`, "Volumetric fog"). No depth sampling, no new op, no new pipelines.
