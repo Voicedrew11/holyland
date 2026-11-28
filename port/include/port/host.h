@@ -159,6 +159,12 @@ int port_whole_frame(void);
    down (pcr.cpp's drawing_scale). */
 int port_whole_fields(void);
 
+/* port_field_screen_begins(): (the game's thread, after sceGsSyncPath) what the game draws from here on is a screen
+   drawn as fields, though the display shows field mode only from the game's next display settings: the PC renderer
+   draws it at the field screens' scale from now (pcr_field_screen_begins). The menu's backdrop
+   (Menu_CopyFrameToTexture), the last frame of play squeezed into a field, keeps the frame's detail. */
+void port_field_screen_begins(void);
+
 /* port_flicker_filter(): 1 while the game draws its flicker filter (port_options.flicker_filter; off by
    default, on with --flicker-filter, --ps2-scanout or the player menu's Graphics tab). Every frame of play
    Game_BlendScreenOffsetDown blends the picture over itself one row lower at half strength, so that a

@@ -94,6 +94,11 @@ public:
     virtual void set_2d(int mode) = 0;
     virtual void set_font(int font) = 0;
     virtual void set_glyphs(const GsnGlyphs &glyphs) = 0;
+    // The scale last set drawn with from here on, not from the next vblank (a screen the game draws as fields begun
+    // before the display shows it: pcr.cpp's field_screen_begins). False when the drawing waits for the vblank.
+    virtual bool scale_now() {
+        return false;
+    }
 
     // The front end's events (pcr_gif.h), with its register file at each
     virtual void primitive(const GsRegisterFile &file, const GifPrimitive &primitive) = 0;

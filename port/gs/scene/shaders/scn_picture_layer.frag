@@ -90,9 +90,11 @@ uvec4 fill(uvec4 cd, uvec4 f) {
 }
 
 void main() {
-    vec2 uv = round(v_stq.xy * 256.0) / 256.0;
+    // (pcr_prim.h's texture_uv and read_surface: rounded to 1/256 of the surface's pixel, not of a texel, which at a
+    // scale of 3 or 6 read the pixel before every third pixel)
+    vec2 h = round(v_stq.xy * vec2(pc.src_scale) * 256.0) / 256.0;
     // (surface_axis without its wrap: the texel's pixel at the scale, the surface's offset added)
-    ivec2 at = ivec2(floor(uv * vec2(pc.src_scale))) + pc.src_offset * pc.src_scale;
+    ivec2 at = ivec2(floor(h)) + pc.src_offset * pc.src_scale;
     uvec4 t = uvec4(round(texelFetch(u_surface, at, 0) * 255.0));
     uint fills = u_fills.entries[0].x;
     for (uint i = 0u; i < fills; i++) {

@@ -46,6 +46,9 @@ static inline int gsr_pipelines_running(void) {
 static inline int gsr_pipelines_building(int *done, int *total) {
     return pcr_pipelines_building(done, total);
 }
+static inline void gsr_field_screen_begins(void) {
+    pcr_field_screen_begins();
+}
 static inline void gsr_read_fifo(void *dst, uint32_t qwords) {
     pcr_read_fifo(dst, qwords);
 }

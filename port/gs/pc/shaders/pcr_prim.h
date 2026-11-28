@@ -257,7 +257,8 @@ uvec4 surface_pixel(ivec2 h, ivec2 size) {
 
 // A surface's texture read at a point (in GS texels), nearest or bilinear among the surface's own pixels
 uvec4 read_surface(vec2 uv, ivec2 size, bool linear) {
-    vec2 h = uv * vec2(pc.src_scale);
+    // (texture_uv's 1/256 of a pixel, rounded again here: uv times the scale can land a little below a whole pixel)
+    vec2 h = round(uv * vec2(pc.src_scale) * 256.0) / 256.0;
     if (!linear) {
         return surface_pixel(ivec2(floor(h)), size);
     }
@@ -295,9 +296,12 @@ vec2 texture_uv() {
     // before on whole triangles of a frame drawn back); rounded to 1/256 texel it lands on it, 2026-11-11. S/T/Q the same:
     // S/Q times the size lands on a whole texel in the menus' brightness sprite and background, which draw the buffer
     // back over itself 1:1, and the menus at 1x sat a GS pixel left of gs's, 2026-11-11. The GS's own U and V are in
-    // 1/16 texel.)
+    // 1/16 texel.) A drawn surface's texture is read in its own pixels, src_scale of them a texel: rounded to 1/256 of
+    // one of those (read_surface). 1/256 of a texel is not a whole number of them at a scale of 3 or 6, and a frame
+    // drawn back 1:1 there read the pixel before every third pixel: the menu's backdrop, 2026-11-27.)
     vec2 uv = (pc.flags & PCR_F_FST) != 0u ? PCR_STQ.xy : PCR_STQ.xy / PCR_STQ.z * size;
-    return round(uv * 256.0) / 256.0;
+    vec2 steps = src_kind() == PCR_SRC_SURFACE ? 256.0 * vec2(pc.src_scale) : vec2(256.0);
+    return round(uv * steps) / steps;
 }
 
 // (with anisotropy or the 2D mode's smooth) their change a pixel across and down, taken in main before anything is
