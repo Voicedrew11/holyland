@@ -13,6 +13,9 @@ void port_state_request_save(int slot);
 void port_state_request_load(int slot);
 /* A save to a file (the flash recorder's folder: port/debug/debug.c); path is copied */
 void port_state_request_save_file(const char *path);
+/* A save to a file as above, and once it is written a copy of it at `copy_path` too (a quick save's exact state
+   kept in the quick save history as well: port/platform/quicksave.c); both paths are copied */
+void port_state_request_save_file_and_copy(const char *path, const char *copy_path);
 
 /* A load from a file (a quick save's exact state: port/platform/quicksave.c); path is copied */
 void port_state_request_load_file(const char *path);

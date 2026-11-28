@@ -2,9 +2,11 @@
 // overlay's control did (port/overlay/overlay.cpp), so settings.json and the command line work as they did.
 #include "settings_rows.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <iterator>
 #include <string_view>
 
@@ -21,6 +23,7 @@ extern "C" {
 #include "port/platform.h"
 #include "port/player_ui.h"
 #include "port/problem_report.h"
+#include "port/quick_history.h"
 #include "port/quicksave.h"
 #include "port/scene_depth.h"
 #include "port/settings.h"
@@ -1122,6 +1125,60 @@ bool quick_slot_full() {
     return port_quick_info(port_settings.quick_slot, &info) != 0;
 }
 
+// The quick save history (port/include/port/quick_history.h): its saves newest first, chosen by their place
+int history_choice = 0;
+bool history_any() {
+    return port_quick_history_count() > 0;
+}
+int history_top() {
+    return port_quick_history_count() - 1;
+}
+int get_history_choice() {
+    history_choice = std::min(history_choice, std::max(history_top(), 0));
+    return history_choice;
+}
+void set_history_choice(int index) {
+    history_choice = index;
+}
+// how long ago it was saved, in the computer's time: "Just now", "12 min ago", "2 h ago", "2 h 5 min ago", "1 day ago", "3 days ago"
+void describe_history_choice(int index, char *out, size_t size) {
+    PortQuickInfo info;
+    if (!port_quick_history_info(index, &info)) {
+        std::snprintf(out, size, "-");
+        return;
+    }
+    const long long minutes = std::max(0LL, (long long)(std::time(nullptr) - info.time) / 60);
+    if (minutes < 1) {
+        std::snprintf(out, size, "Just now");
+    } else if (minutes < 60) {
+        std::snprintf(out, size, "%lld min ago", minutes);
+    } else if (minutes < 24 * 60 && minutes % 60 == 0) {
+        std::snprintf(out, size, "%lld h ago", minutes / 60);
+    } else if (minutes < 24 * 60) {
+        std::snprintf(out, size, "%lld h %lld min ago", minutes / 60, minutes % 60);
+    } else if (minutes < 2 * 24 * 60) {
+        std::snprintf(out, size, "1 day ago");
+    } else {
+        std::snprintf(out, size, "%lld days ago", minutes / (24 * 60));
+    }
+}
+// where and how the chosen one was: the map's name, the level and HP, the play time
+const char *history_choice_note() {
+    static char text[256];
+    PortQuickInfo info;
+    if (!port_quick_history_info(get_history_choice(), &info)) {
+        return "";
+    }
+    const char *name = port_teleport_map_name(info.map_tag & 0xFF);
+    const unsigned played = info.play_seconds;
+    std::snprintf(text, sizeof(text), "%s%sLevel %d, HP %d/%d. Played %u:%02u:%02u.", name, name[0] != 0 ? ". " : "",
+                  info.level, info.hp, info.hp_max, played / 3600, played / 60 % 60, played % 60);
+    return text;
+}
+void history_load() {
+    port_quick_history_request_load(get_history_choice());
+}
+
 
 // ---- Sound and the menu ---------------------------------------------------------------------------------------------
 int get_volume() {
@@ -1408,6 +1465,13 @@ const SettingRow general_rows[] = {
      nullptr, nullptr, quick_save},
     {"Quick Load", "Loads when the menu closes. Enemies come back as when entering a map.", RowKind::action, {}, {},
      nullptr, nullptr, quick_load, nullptr, nullptr, quick_slot_full},
+    {"Earlier Save",
+     "Every quick save is also kept here, in case one was taken at a bad moment. The newest few stay, then one for "
+     "every ten minutes of play and the last one on each map before you left it.",
+     RowKind::number, {}, {0, 0, 1}, get_history_choice, set_history_choice, nullptr, describe_history_choice,
+     history_any, nullptr, nullptr, history_choice_note, -1, history_top},
+    {"Load Earlier Save", "Loads when the menu closes. Enemies come back as when entering a map.", RowKind::action, {},
+     {}, nullptr, nullptr, history_load, nullptr, history_any, nullptr, nullptr, history_choice_note},
     {"Menu", "", RowKind::heading},
     {"Pause While Open", "The game holds still while this menu is open.", RowKind::toggle, on_off, {}, get_pause,
      set_pause},

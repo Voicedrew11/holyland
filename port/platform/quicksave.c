@@ -27,8 +27,10 @@
          then the save image, exactly as Game_WriteSaveImage made it (the bytes a save point's save holds).
 
    Beside a slot's file, quick<N>.kf4state: the save state taken at the vblank after it (port/platform/
-   savestate.c), which a load from the slot uses when this build made it (port_quick_load_exact). A save
-   removes the slot's old state first, so a state is never older than its image. */
+   savestate.c), which a load uses when this build made it (port_quick_load_exact). A save removes the old
+   state first, so a state is never older than its image. The history's copy of a slot's save gets a copy of
+   that state beside it too (history-<n>.kf4state), and a load from any file uses the state beside it the same
+   way. */
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -46,6 +48,7 @@
 #include "port/file_replace.h"
 #include "port/automap.h"
 #include "port/hands.h"
+#include "port/quick_history.h"
 #include "port/quick_info.h"
 #include "port/quicksave.h"
 #include "port/savestate.h"
@@ -135,9 +138,15 @@ static void slot_path(char *out, size_t size, int slot, int create) {
     snprintf(out + strlen(out), size - strlen(out), "/quick%d.kf4quick", slot);
 }
 
-/* the slot's exact state, beside its file */
-static void state_path(char *out, size_t size, int slot) {
-    snprintf(out, size, "%s/quicksaves/quick%d.kf4state", port_data_dir(), slot);
+/* a quick save's exact state, beside its file: name.kf4quick's is name.kf4state */
+static void state_beside(char *out, size_t size, const char *quick_path) {
+    static const char suffix[] = ".kf4quick";
+    size_t length = strlen(quick_path), stem = length;
+
+    if (length >= sizeof(suffix) - 1 && strcmp(quick_path + length - (sizeof(suffix) - 1), suffix) == 0) {
+        stem = length - (sizeof(suffix) - 1);
+    }
+    snprintf(out, size, "%.*s.kf4state", (int)stem, quick_path);
 }
 
 static void target_path(char *out, size_t size, const Request *r, int create) {
@@ -255,12 +264,17 @@ static uint8_t *read_file(const char *path, size_t *size, PortQuickInfo *info, c
 
 int port_quick_info(int slot, PortQuickInfo *info) {
     char path[1024];
-    uint8_t head[QUICK_HEADER_SIZE + QUICK_INFO_SIZE_MIN]; /* what the overlay lists */
+
+    slot_path(path, sizeof(path), slot, 0);
+    return port_quick_file_info(path, info);
+}
+
+int port_quick_file_info(const char *path, PortQuickInfo *info) {
+    uint8_t head[QUICK_HEADER_SIZE + QUICK_INFO_SIZE_MIN]; /* what the menu lists */
     uint32_t image_size, info_size;
     FILE *file;
     int ok;
 
-    slot_path(path, sizeof(path), slot, 0);
     file = fopen(path, "rb");
     if (file == NULL) {
         return 0;
@@ -304,6 +318,13 @@ void port_quick_request_save_file(const char *path) {
 
     snprintf(kept, sizeof(kept), "%s", path);
     ask(PORT_QUICK_SAVE, -1, kept, 0);
+}
+
+void port_quick_request_load_file(const char *path) {
+    static char kept[1100];
+
+    snprintf(kept, sizeof(kept), "%s", path);
+    ask(PORT_QUICK_LOAD, -1, kept, 0);
 }
 
 void port_quick_request_teleport(int map, const float position[3], float heading, const char *label, int patient) {
@@ -357,14 +378,56 @@ void port_quick_vblank(void) {
     }
 }
 
+/* The file written whole beside its place, then put in place (the old one is kept if anything fails): 1 when written */
+static int write_quick_file(const char *path, const uint8_t *header, const uint8_t *info, const uint8_t *image,
+                            size_t size) {
+    char temp[1100];
+    FILE *file;
+    int ok;
+
+    snprintf(temp, sizeof(temp), "%s.part", path);
+    file = fopen(temp, "wb");
+    ok = file != NULL;
+    if (ok) {
+        ok = fwrite(header, QUICK_HEADER_SIZE, 1, file) == 1 && fwrite(info, QUICK_INFO_SIZE, 1, file) == 1 &&
+             fwrite(image, 1, size, file) == size;
+        ok = fclose(file) == 0 && ok;
+    }
+    if (ok) {
+        ok = port_replace_file(temp, path);
+    }
+    if (!ok) {
+        remove(temp);
+    }
+    return ok;
+}
+
+/* A slot's save kept in the history too (port/include/port/quick_history.h), with the mods' files. state_out: where
+   the copy of the slot's exact state goes, beside the history's file ("" when it was not written). */
+static void keep_in_history(const uint8_t *header, const uint8_t *info, const uint8_t *image, size_t size,
+                            char *state_out, size_t state_size) {
+    char path[1024];
+
+    state_out[0] = 0;
+    port_quick_history_next_path(path, sizeof(path));
+    state_beside(state_out, state_size, path);
+    remove(state_out); /* (a stale one left by a file removed by hand) */
+    if (!write_quick_file(path, header, info, image, size)) {
+        port_event("quick history: cannot write %s", path);
+        state_out[0] = 0;
+        return;
+    }
+    port_automap_quick_saved(path);
+    port_hands_quick_saved(path);
+    port_quick_history_added();
+}
+
 int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *game_info) {
-    char path[1024], temp[1100], name[1100], state[1100];
+    char path[1024], name[1100], state[1100], history_state[1100];
     uint8_t header[QUICK_HEADER_SIZE];
     uint8_t info[QUICK_INFO_SIZE];
     PortQuickInfo stamped = *game_info;
     int slot = request.path == NULL ? request.slot : -1;
-    FILE *file;
-    int ok;
 
     request_name(name, sizeof(name), &request);
     request.kind = PORT_QUICK_NONE;
@@ -384,30 +447,18 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
     put64(header + 32, hash_bytes(hash_bytes(0xCBF29CE484222325ull, info, sizeof(info)), image, size));
 
     target_path(path, sizeof(path), &request, 1);
-    if (slot >= 0) {
-        state_path(state, sizeof(state), slot);
-        remove(state); /* (none yet is fine) never left older than the image */
-    }
-    snprintf(temp, sizeof(temp), "%s.part", path);
-    file = fopen(temp, "wb");
-    ok = file != NULL;
-    if (ok) {
-        ok = fwrite(header, sizeof(header), 1, file) == 1 && fwrite(info, sizeof(info), 1, file) == 1 &&
-             fwrite(image, 1, size, file) == size;
-        ok = fclose(file) == 0 && ok;
-    }
-    if (ok) {
-        ok = port_replace_file(temp, path); /* the old file is kept if this fails */
-    }
-    if (!ok) {
-        remove(temp);
+    state_beside(state, sizeof(state), path);
+    remove(state); /* (none yet is fine) never left older than the image */
+    if (!write_quick_file(path, header, info, image, size)) {
         set_message("cannot write %s", path);
         return 0;
     }
     port_automap_quick_saved(path); /* the automap mod: the explored maps kept with the save */
     port_hands_quick_saved(path); /* the hands mod: the hands kept with the save */
     if (slot >= 0) {
-        port_state_request_save_file(state); /* at the next vblank: the exact state */
+        keep_in_history(header, info, image, size, history_state, sizeof(history_state));
+        /* at the next vblank: the exact state, and its copy in the history */
+        port_state_request_save_file_and_copy(state, history_state);
     }
     port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d neighbour %02X "
                "(origin %d, %s)", name, stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2],
@@ -445,18 +496,18 @@ int port_quick_load_exact(void) {
     uint8_t *image;
     size_t size;
 
-    if (request.kind != PORT_QUICK_LOAD || request.path != NULL) {
+    if (request.kind != PORT_QUICK_LOAD) {
         return 0;
     }
     request_name(name, sizeof(name), &request);
-    state_path(state, sizeof(state), request.slot);
+    target_path(path, sizeof(path), &request, 0);
+    state_beside(state, sizeof(state), path);
     why = port_state_file_usable(state, &state_time);
     if (why != NULL) {
         port_event("quick load of %s: no exact state (%s): the game loads its save image", name, why);
         return 0;
     }
-    target_path(path, sizeof(path), &request, 0);
-    image = read_file(path, &size, &info, &why); /* the slot's file must be whole too, and not newer */
+    image = read_file(path, &size, &info, &why); /* the quick save must be whole too, and not newer */
     free(image);
     if (image == NULL || state_time < info.time) {
         port_event("quick load of %s: its exact state %s: the game loads its save image", name,

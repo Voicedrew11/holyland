@@ -216,6 +216,8 @@ add_library(kf4_port STATIC
     port/sdk/libsdr.c
     port/platform/savestate.c
     port/platform/quick_info.c
+    port/platform/quick_history.c
+    port/platform/quick_history_rules.c
     port/platform/quicksave.c
     port/platform/teleport.c
     port/platform/cheats.c
@@ -981,6 +983,16 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME quick_info COMMAND quick_info_test)
+endif()
+
+# the quick save history's rule: which saves it keeps (port/platform/quick_history_rules.c)
+add_executable(quick_history_test tests/quick_history_test.c port/platform/quick_history_rules.c)
+target_include_directories(quick_history_test PRIVATE port/include)
+if(NOT WIN32)
+    target_compile_options(quick_history_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME quick_history COMMAND quick_history_test)
 endif()
 
 # Twin-stick controls: the sticks as the game's buttons and the speeds they set (port/sdk/twin_stick.c)

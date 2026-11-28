@@ -161,6 +161,7 @@ int port_hands_event_key(const char *name);
 /* ---- Per save (port/platform/hands.c) ----------------------------------------------------------------------- */
 void port_hands_save_file(int number, int writing); /* game/saves.c: save `number` (1 to 3) written or loaded */
 void port_hands_quick_saved(const char *path);       /* quicksave.c: a quick save was written */
+void port_hands_quick_removed(const char *path);     /* quick_history.c: a quick save was removed */
 void port_hands_quick_loading(const char *path);     /* quicksave.c: one is being loaded */
 void port_hands_title(void);                         /* (game) the title screen: the next game may be a new one */
 int port_hands_new_game(void);                       /* (game, the first frame in play after the title) 1: a new game */

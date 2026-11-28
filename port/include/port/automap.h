@@ -174,6 +174,7 @@ int port_automap_browse_self_test(void);
    save made without the mod); a new game starts with nothing explored. */
 void port_automap_save_file(int number, int writing); /* game/saves.c: save `number` (1 to 3) written or loaded */
 void port_automap_quick_saved(const char *path);       /* quicksave.c: a quick save was written */
+void port_automap_quick_removed(const char *path);     /* quick_history.c: a quick save was removed */
 void port_automap_quick_loading(const char *path);     /* quicksave.c: a quick save is being loaded */
 /* the game's side keeps the explored state; these move it to and from bytes */
 size_t Automap_Serialize(uint8_t **out);   /* malloc'd */
